@@ -364,6 +364,18 @@ class SafeMLPActorCritic(nn.Module):
             v = self.v(obs)
             vc = self.vc(obs)
         return a.numpy(), a_h.numpy(), b_h.numpy(), v.numpy(), vc.numpy(), logp_a.numpy(), logp_b.numpy()
-
+    def stepEval(self, obs):
+        with torch.no_grad():
+            pi_a, pi_b = self.pi._distribution(obs)
+            a_h, b_h = pi_a.sample(), pi_b.sample()
+            a_dim = a_h.shape[-1]
+            a = torch.tensor(self.action_space.sample())
+                # project into hyperplane
+            if a_h @ a < b_h:
+                a = a - (((a_h @ a) - b_h) / torch.norm(a, dim=-1)) * a_h
+            logp_a, logp_b = self.pi._log_prob_from_distribution(pi_a, a_h, pi_b, b_h)
+            v = self.v(obs)
+            vc = self.vc(obs)
+        return a.numpy(), a_h.numpy(), b_h.numpy(), v.numpy(), vc.numpy(), logp_a.numpy(), logp_b.numpy()
     def act(self, obs):
         return self.step(obs)[0]

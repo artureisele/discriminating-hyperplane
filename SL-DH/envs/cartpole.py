@@ -166,6 +166,7 @@ Any further steps are undefined behavior.
         num_states = states.shape[0]
         num_inputs = inputs.shape[1]
         env_copy = copy.deepcopy(self)
+        print("Starting next states calculation")
         next_states = env_copy.next_states(states, inputs)
         labels = np.sign(self.inv_set.forward(next_states.reshape(-1, 4))).reshape(num_states, num_inputs)
         return labels
@@ -186,9 +187,12 @@ Any further steps are undefined behavior.
     
     def sample_data(self, num_states, num_inputs):
         states = self.sample_states(num_states)
+        print("Sampled states")
         while len(states) <= num_states:
+            print("Sampled States again")
             states = np.vstack((states, self.sample_states(num_states)))
         inputs = self.sample_inputs(states, num_inputs)
+        print("Sampled inputs")
         labels = self.label_inputs(states, inputs)
         return states[:num_states], inputs[:num_states], labels[:num_states]
     

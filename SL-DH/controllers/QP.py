@@ -11,6 +11,8 @@ class QP_CBF_controller():
   def forward(self, x, t):
     a,b = self.filter.get_hyp(x)
     a_norm = np.linalg.norm(a)
+    a = a.astype(np.float64)
+    b = b.astype(np.float64)
     a /= a_norm
     b /= a_norm
     target_u = self.target.forward(x, t)

@@ -25,7 +25,7 @@ class Cartpole(gym.Env):
         self.focus = focus
 
         # Angle at which to fail the episode
-        self.theta_threshold_radians = 12 * 2 * math.pi / 360
+        self.theta_threshold_radians = 24 * 2 * math.pi / 360
         self.x_threshold = 2.4
 
         # Angle limit set to 2 * theta_threshold_radians so failing observation
@@ -79,18 +79,24 @@ class Cartpole(gym.Env):
         force = self.force_mag * float(action)
         self.state = self.stepPhysics(force)
         x, x_dot, theta, theta_dot = self.state
-        done = x < -self.x_threshold \
-            or x > self.x_threshold \
-            or theta < -self.theta_threshold_radians \
-            or theta > self.theta_threshold_radians
-        done = False
+        done = x < -self.x_threshold*1.5 \
+            or x > self.x_threshold*1.5 \
+            or theta < -self.theta_threshold_radians*1.5 \
+            or theta > self.theta_threshold_radians*1.5
+        #done = False
 
         if not done:
-            reward = 1 + bonus if abs(self.state[0]) <= 0.5 else -1
+            if x > -self.x_threshold \
+            and x < self.x_threshold \
+            and theta > -self.theta_threshold_radians \
+            and theta < self.theta_threshold_radians:
+                reward = 1 + bonus
+            else:
+                reward = -1
         elif self.steps_beyond_done is None:
             # Pole just fell!
             self.steps_beyond_done = 0
-            reward = 1 + bonus if abs(self.state[0]) <= 0.5 else -1
+            reward = -100
         else:
             if self.steps_beyond_done == 0:
                 logger.warn("""

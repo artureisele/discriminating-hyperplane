@@ -1,4 +1,6 @@
 import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 import torch
 from torch.optim import Adam
 import gym
@@ -9,8 +11,77 @@ from utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
 from torch.nn.functional import softplus
 from envs.cartpole_pret import Cartpole
-from envs.HalhCheetah_pret import HalfCheetahEnv
+Cartpole(0, 0, focus=0)
+import math
+#from envs.HalhCheetah_pret import HalfCheetahEnv
 torch.autograd.set_detect_anomaly(True)
+
+def evaluate(eval_env, env_steps_count,ac):
+    evalReturn = 0
+    evalIters=1
+    borders = []
+    colors=[]
+    for i in range(evalIters):
+        d = False
+        steps = 0
+        o = eval_env.reset()
+        while(not (d or (steps%4000==0 and steps != 0)) ):
+            a, a_h, b_h, v, vc, logp_a, logp_b = ac.stepEval(torch.as_tensor(o, dtype=torch.float32))
+            next_o, r, d, info = eval_env.step(a)
+            evalReturn+=r
+            steps +=1
+            eval_env.render()
+            if(a_h>0):
+                to_right_is_dangerous = True
+            else:
+                to_right_is_dangerous = False
+            threshold = (b_h/a_h)[0]
+            borders.append([o[0],o[2],to_right_is_dangerous, threshold])
+            colors.append(steps/600)
+            o = next_o
+
+    fig = plt.figure(figsize=(8, 8))
+    ax = fig.add_subplot(111)
+    arrowDirX=[]
+    arrowDirY=[]
+    for _,_,to_right_is_dangerous, threshold in borders:
+        intensity = min(abs(threshold),1)
+        if to_right_is_dangerous:
+            if threshold<0:
+                #Strong decision drive left(negative) <------
+                arrowDirX.append(-1+ intensity * -20)
+                arrowDirY.append(0)
+            else:
+                arrowDirX.append(0)
+                arrowDirY.append(0.1)
+        else:
+            if threshold<0:
+                arrowDirX.append(0)
+                arrowDirY.append(-0.1)
+            else:
+                #Strong decision drive right(positive) <------
+                arrowDirX.append(1+intensity*20)
+                arrowDirY.append(0)
+    borders = np.array(borders)
+    safe_x = 2.4
+    safe_radians = 24 * 2 * math.pi / 360
+    rectangle = patches.Rectangle((-safe_x, -safe_radians), 2*safe_x, 2*safe_radians, linewidth=2, edgecolor='green', facecolor='white')
+    ax.add_patch(rectangle)
+    quiver_plot=plt.quiver(borders[:,0], borders[:,1], arrowDirX, arrowDirY,colors, cmap="viridis", angles='xy', scale_units='xy', scale=25)
+    # This are the borders of the simulation
+    plt.axis([-2*safe_x, 2*safe_x, -2*safe_radians, 2*safe_radians])
+    plt.colorbar(quiver_plot, label="Timesteps")            
+    plt.xlabel("X")
+    plt.ylabel("Theta")
+    plt.title("Cartpole Border Decisions")
+
+    # Log the plot to WandB
+    wandb.log({"Cartpole Border Decisions": wandb.Image(plt)})
+    plt.close()  # Close plot to avoid replotting issues
+    evalReturn/=evalIters
+    wandb.log(data={"agent_eval/env_step": env_steps_count,
+                    "agent_eval/episode_reward": evalReturn
+    })
 
 
 class PPOBuffer:
@@ -229,8 +300,20 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     """
 
     # Special function to avoid certain slowdowns from PyTorch + MPI combo.
-    setup_pytorch_for_mpi()
+    #setup_pytorch_for_mpi()
 
+    wandb.define_metric("agent_eval/env_step")
+    wandb.define_metric("agent_eval/episode_reward", step_metric="agent_eval/env_step")
+
+
+    wandb.define_metric("agent_train/env_step")
+    wandb.define_metric("agent_train/lossPi",step_metric="agent_train/env_step")
+    wandb.define_metric("agent_train/LossV",step_metric="agent_train/env_step")
+    wandb.define_metric("agent_train/KL",step_metric="agent_train/env_step")
+    wandb.define_metric("agent_train/Entropy",step_metric="agent_train/env_step")
+    wandb.define_metric("agent_train/ClipFrac",step_metric="agent_train/env_step")
+    wandb.define_metric("agent_train/DeltaLossPi",step_metric="agent_train/env_step")
+    wandb.define_metric("agent_train/DeltaLossV", step_metric="agent_train/env_step")
     # Set up logger and save configuration
     logger = EpochLogger(**logger_kwargs)
     logger.save_config(locals())
@@ -242,6 +325,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Instantiate environment
     env = env_fn()
+    eval_env = env_fn()
     obs_dim = env.observation_space.shape
     act_dim = env.action_space.shape
 
@@ -330,7 +414,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
   
 
-    def update():
+    def update(env_steps_count):
         cur_cost = logger.get_stats('EpCost')[0]
         data = buf.get()
         data['cur_cost'] = cur_cost
@@ -396,6 +480,17 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Log changes from update
         kl, ent, cf = pi_info['kl'], pi_info_old['ent'], pi_info['cf']
+        wandb.log({"Test123": "2"})
+        wandb.log(data = {
+            "agent_train/env_step": env_steps_count,
+            "agent_train/lossPi": pi_l_old,
+            "agent_train/LossV": v_l_old,
+            "agent_train/KL": kl,
+            "agent_train/Entropy": ent,
+            "agent_train/ClipFrac": cf,
+            "agent_train/DeltaLossPi": (loss_pi.item() - pi_l_old),
+            "agent_train/DeltaLossV": (loss_v.item() - v_l_old)
+        })
         logger.store(LossPi=pi_l_old, LossV=v_l_old,
                      KL=kl, Entropy=ent, ClipFrac=cf,
                      DeltaLossPi=(loss_pi.item() - pi_l_old),
@@ -405,9 +500,13 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Prepare for interaction with environment
     start_time = time.time()
-    o, ep_ret,ep_cret, ep_len = env.reset()[0], 0, 0, 0
-
+    o  = env.reset()
+    ep_ret,ep_cret, ep_len = 0,0,0
+    env_steps_count = 0
     # Main loop: collect experience in env and update/log each epoch
+    batch_size= 500
+    borders = np.zeros((batch_size,4))
+    frames=[]
     for epoch in range(epochs):
         for t in range(local_steps_per_epoch):
             a, a_h, b_h, v, vc, logp_a, logp_b = ac.step(torch.as_tensor(o, dtype=torch.float32))
@@ -417,6 +516,11 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             ep_ret += r
             ep_cret += c
             ep_len += 1
+            env_steps_count +=1
+            #Start Evaluation
+            if env_steps_count %50000 == 0:
+                evaluate(eval_env, env_steps_count, ac)
+
 
             # save and log
             buf.store(o, a, a_h, b_h, r, c, v,vc, logp_a, logp_b)
@@ -443,7 +547,9 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 if terminal:
                     # only save EpRet / EpLen if trajectory finished
                     logger.store(EpRet=ep_ret, EpLen=ep_len, EpCost=ep_cret)
-                o, ep_ret, ep_cret, ep_len = env.reset()[0], 0, 0, 0
+                o = env.reset()
+                ep_ret, ep_cret, ep_len = 0,0,0
+
 
 
         # Save model
@@ -453,7 +559,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             logger.save_state({'env': env}, None)
 
         # Perform PPO update!
-        update()
+        update(env_steps_count)
         # Log info about epoch
         logger.log_tabular('Epoch', epoch)
         logger.log_tabular('EpRet', with_min_and_max=True)
@@ -471,6 +577,8 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('StopIter', average_only=True)
         logger.log_tabular('Time', time.time()-start_time)
         logger.dump_tabular()
+        
+
 
 if __name__ == '__main__':
     import argparse
@@ -481,7 +589,7 @@ if __name__ == '__main__':
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--seed', '-s', type=int, default=0)
     parser.add_argument('--cpu', type=int, default=4)
-    parser.add_argument('--steps', type=float, default=4000)
+    parser.add_argument('--steps', type=float, default=5000000)
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--exp_name', type=str, default='fppo')
     args = parser.parse_args()
@@ -494,8 +602,16 @@ if __name__ == '__main__':
         env_fn = lambda : HalfCheetahEnv()
     else:
         raise NotImplementedError('Env name not implemented')
-
-    mpi_fork(args.cpu)  # run parallel code with mpi
+    import wandb
+    wandb_run = wandb.init(
+        # set the wandb project name where this run will be logged online
+        project="Discriminating hyperplanes",
+        config=args,
+        job_type="rm2ac-algorithm",
+        group="Cartpole",
+        name="Cartpole_1"
+    )
+    #mpi_fork(args.cpu)  # run parallel code with mpi
 
     from utils.run_utils import setup_logger_kwargs
     logger_kwargs = setup_logger_kwargs(args.exp_name, args.env, args.seed)

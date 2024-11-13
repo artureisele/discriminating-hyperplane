@@ -36,7 +36,9 @@ num_log = 4
 train_losses = []
 val_losses = []
 best_loss = float('inf')
+print("Sample Data 1/2")
 val_states, val_inputs, val_labels = env.sample_data(num_states, num_inputs)
+print("Sample Data 2/2")
 train_states, train_inputs, train_labels = env.sample_data(num_states, num_inputs)
 plt.scatter(val_states[:, 0], val_states[:, 1])
 plt.savefig('exps/cartpole/states.png')
