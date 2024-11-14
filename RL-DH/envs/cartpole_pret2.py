@@ -211,6 +211,31 @@ Any further steps are undefined behavior.
             x_hist.append(x_t)
             step += 1
         return np.array(x_hist), np.array(a_hist), term
+    def sample_data_real_trajectory2(self, num_steps, num_actions):
+        x_hist = []
+        a_hist = []
+        done_hist = []
+        pos = np.random.uniform(-3, 3, 1)
+        vel = np.random.uniform(-5, 5, 1)
+        theta = np.random.uniform(-.418, .418, 1)
+        theta_dot = np.random.uniform(-1, 1, 1)
+        states = (pos, vel, theta, theta_dot)
+        inital_state = self.reset(states)
+        x_hist.append(inital_state)
+        for j in range(num_actions):
+            self.reset(inital_state)
+            term = False
+            step = 0
+            a = self.action_space.sample()
+            a = np.float32(a)
+            a_hist.append(a)
+            while step < num_steps:
+                x_t, rew, done, info = self.step(a)
+                if done:
+                    term = done[0]
+                step += 1
+            done_hist.append(term)
+        return np.array(x_hist), np.array(a_hist), np.array(done_hist)
     def sample_data(self, num_states, num_inputs):
         states = self.sample_states(num_states)
         while len(states) <= num_states:

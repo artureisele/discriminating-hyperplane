@@ -30,7 +30,7 @@ def evaluate(eval_env, env_steps_count,ac):
             next_o, r, d, info = eval_env.step(a)
             evalReturn+=r
             steps +=1
-            eval_env.render()
+            #eval_env.render()
             if(a_h>0):
                 to_right_is_dangerous = True
             else:
@@ -589,7 +589,7 @@ if __name__ == '__main__':
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--seed', '-s', type=int, default=0)
     parser.add_argument('--cpu', type=int, default=4)
-    parser.add_argument('--steps', type=float, default=5000000)
+    parser.add_argument('--steps', type=float, default=10000)
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--exp_name', type=str, default='fppo')
     args = parser.parse_args()
