@@ -68,7 +68,10 @@ class Cartpole(gym.Env):
         return (x, x_dot, theta, theta_dot)
 
     def step(self, action):
-        action = np.clip(action, -1, 1)
+        print(action)
+        action = np.clip(action, -0.999, 0.999)
+        action = np.float32(action)
+        print(self.action_space)
         assert self.action_space.contains(action), \
             "%r (%s) invalid" % (action, type(action))
         # Cast action to float to strip np trappings
@@ -86,7 +89,8 @@ class Cartpole(gym.Env):
         elif self.steps_beyond_done is None:
             # Pole just fell!
             self.steps_beyond_done = 0
-            reward = 1.0
+            #????? #EFF
+            reward = 0
         else:
             if self.steps_beyond_done == 0:
                 logger.warn("""
