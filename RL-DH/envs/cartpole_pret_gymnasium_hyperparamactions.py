@@ -15,7 +15,7 @@ from gymnasium.vector import VectorEnv
 from gymnasium.vector.utils import batch_space
 
 
-class CartPoleEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
+class CartPoleEnvParamActions(gym.Env[np.ndarray, Union[int, np.ndarray]]):
     """
     
     | Num | Observation           | Min                 | Max               |
@@ -89,13 +89,18 @@ class CartPoleEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
             np.finfo(np.float32).max,
             self.theta_threshold_radians * 2,
             np.finfo(np.float32).max])
-
-        self.action_space = spaces.Box(
-            low=self.min_action,
-            high=self.max_action,
-            shape=(1,)
-        )
         self.observation_space = spaces.Box(-high, high)
+
+        #a should be between -1 and 1 -> but actually vector with norm 1
+        #b should be between -X and X where X is the maximum action magnitude of the real actions
+        action_low = np.array([-1,-1])
+        action_high = np.array([1,1])
+        #a,b of a hyperplane
+        self.action_space = spaces.Box(
+            low=action_low,
+            high=action_high,
+            shape=(2,)
+        )
 
         self.render_mode = render_mode
 
@@ -128,7 +133,14 @@ class CartPoleEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
         ), f"{action!r} ({type(action)}) invalid"
         assert self.state is not None, "Call reset before using step method."
         # Cast action to float to strip np trappings
-        force = self.force_mag * float(action)
+        uniform_action = np.random.uniform(-1, 1,(1))
+        a = uniform_action
+        #Hyperplane action
+        a_h = action[:-1]
+        b_h = action[-1]
+        if a_h @ a < b_h:
+            a = a - (((a_h @ a) - b_h) / np.linalg.norm(a)) * a_h
+        force = self.force_mag * float(a)
         self.state = self.stepPhysics(force)
         x, x_dot, theta, theta_dot = self.state
         self.state = np.array((x, x_dot, theta, theta_dot), dtype=np.float64)
@@ -139,7 +151,7 @@ class CartPoleEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
             or theta > self.theta_threshold_radians
         )
         if not terminated:
-            reward = 1.0
+            reward = 1.0 + (1 if a_h @ uniform_action >= b_h else 0)
         elif self.steps_beyond_terminated is None:
             # Pole just fell!
             self.steps_beyond_terminated = 0

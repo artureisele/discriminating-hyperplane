@@ -36,3 +36,8 @@ appmap.log
 settings
 appmap.log
 RL-DH/wandb
+RL-DH/videos
+RL-DH/runs
+runs/
+videos/
+wandb/

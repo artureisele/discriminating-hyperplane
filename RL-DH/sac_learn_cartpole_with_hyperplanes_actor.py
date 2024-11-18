@@ -6,6 +6,10 @@ from dataclasses import dataclass
 from gymnasium.envs.registration import register
 from envs.cartpole_pret_gymnasium import CartPoleEnv
 register(
+    id="customEnvs/CartPoleEnvParamActions",
+    entry_point="envs.cartpole_pret_gymnasium_hyperparamactions:CartPoleEnvParamActions",
+)
+register(
     id="customEnvs/CartPoleEnv",
     entry_point="envs.cartpole_pret_gymnasium:CartPoleEnv",
 )
@@ -40,9 +44,9 @@ class Args:
     """whether to capture videos of the agent performances (check out `videos` folder)"""
 
     # Algorithm specific arguments
-    env_id: str = "customEnvs/CartPoleEnv"
+    env_id: str = "customEnvs/CartPoleEnvParamActions"
     """the environment id of the task"""
-    total_timesteps: int = 30000
+    total_timesteps: int = 3000000
     """total timesteps of the experiments"""
     buffer_size: int = int(1e6)
     """the replay memory buffer size"""
@@ -101,7 +105,7 @@ class SoftQNetwork(nn.Module):
         return x
 
 
-LOG_STD_MAX = 2
+LOG_STD_MAX = -3
 LOG_STD_MIN = -5
 
 
@@ -137,6 +141,10 @@ class Actor(nn.Module):
         x_t = normal.rsample()  # for reparameterization trick (mean + std * N(0,1))
         y_t = torch.tanh(x_t)
         action = y_t * self.action_scale + self.action_bias
+        #Normalize to unit vector
+        torch.autograd.set_detect_anomaly(True)
+        action_normalized_ah_part = action[:,:-1] / torch.norm(action[:,:-1], dim=-1, keepdim=True)  # Normalize to unit sphere
+        action = torch.cat((action_normalized_ah_part, action[:, -1:].clone()), dim=-1)
         log_prob = normal.log_prob(x_t)
         # Enforcing Action Bound
         log_prob -= torch.log(self.action_scale * (1 - y_t.pow(2)) + 1e-6)
@@ -235,6 +243,8 @@ poetry run pip install "stable_baselines3==2.0.0a1"
         # TRY NOT TO MODIFY: record rewards for plotting purposes
         if "final_info" in infos:
             for info in infos["final_info"]:
+                if info['episode'].get('r',None) == None:
+                    print("Fck")
                 print(f"global_step={global_step}, episodic_return={info['episode']['r']}")
                 writer.add_scalar("charts/episodic_return", info["episode"]["r"], global_step)
                 writer.add_scalar("charts/episodic_length", info["episode"]["l"], global_step)
@@ -315,5 +325,8 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 if args.autotune:
                     writer.add_scalar("losses/alpha_loss", alpha_loss.item(), global_step)
 
+    model_save_path = 'videos/customEnvs/actor_model.pth'
+    torch.save(actor.state_dict(), model_save_path)
+    print(f"Model saved to {model_save_path}")
     envs.close()
     writer.close()
