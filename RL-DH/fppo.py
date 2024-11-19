@@ -480,7 +480,6 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         # Log changes from update
         kl, ent, cf = pi_info['kl'], pi_info_old['ent'], pi_info['cf']
-        wandb.log({"Test123": "2"})
         wandb.log(data = {
             "agent_train/env_step": env_steps_count,
             "agent_train/lossPi": pi_l_old,
@@ -589,9 +588,9 @@ if __name__ == '__main__':
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--seed', '-s', type=int, default=0)
     parser.add_argument('--cpu', type=int, default=4)
-    parser.add_argument('--steps', type=float, default=10000)
+    parser.add_argument('--steps', type=float, default=500000)
     parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--exp_name', type=str, default='fppo')
+    parser.add_argument('--exp_name', type=str, default='fppo_Retest')
     args = parser.parse_args()
 
     if args.env == 'CartPole':
@@ -607,9 +606,9 @@ if __name__ == '__main__':
         # set the wandb project name where this run will be logged online
         project="Discriminating hyperplanes",
         config=args,
-        job_type="rm2ac-algorithm",
-        group="Cartpole",
-        name="Cartpole_1"
+        job_type="cleanRL",
+        group="cleanRL",
+        name="Cartpole_Retest"
     )
     #mpi_fork(args.cpu)  # run parallel code with mpi
 

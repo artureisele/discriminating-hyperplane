@@ -128,10 +128,6 @@ class CartPoleEnvParamActions(gym.Env[np.ndarray, Union[int, np.ndarray]]):
         return (x, x_dot, theta, theta_dot)
 
     def step(self, action):
-        assert self.action_space.contains(
-            action
-        ), f"{action!r} ({type(action)}) invalid"
-        assert self.state is not None, "Call reset before using step method."
         # Cast action to float to strip np trappings
         uniform_action = np.random.uniform(-1, 1,(1))
         a = uniform_action
@@ -140,6 +136,11 @@ class CartPoleEnvParamActions(gym.Env[np.ndarray, Union[int, np.ndarray]]):
         b_h = action[-1]
         if a_h @ a < b_h:
             a = a - (((a_h @ a) - b_h) / np.linalg.norm(a)) * a_h
+
+        #assert self.action_space.contains(
+       #     action
+       # ), f"{action!r} ({type(action)}) invalid"
+        assert self.state is not None, "Call reset before using step method."
         force = self.force_mag * float(a)
         self.state = self.stepPhysics(force)
         x, x_dot, theta, theta_dot = self.state
@@ -155,7 +156,7 @@ class CartPoleEnvParamActions(gym.Env[np.ndarray, Union[int, np.ndarray]]):
         elif self.steps_beyond_terminated is None:
             # Pole just fell!
             self.steps_beyond_terminated = 0
-            reward = -50 
+            reward = -1
         else:
             if self.steps_beyond_terminated == 0:
                 logger.warn(

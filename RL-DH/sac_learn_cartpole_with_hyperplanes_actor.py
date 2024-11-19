@@ -46,9 +46,9 @@ class Args:
     # Algorithm specific arguments
     env_id: str = "customEnvs/CartPoleEnvParamActions"
     """the environment id of the task"""
-    total_timesteps: int = 3000000
+    total_timesteps: int = 90000
     """total timesteps of the experiments"""
-    buffer_size: int = int(1e6)
+    buffer_size: int = int(5e4)
     """the replay memory buffer size"""
     gamma: float = 0.99
     """the discount factor gamma"""
@@ -66,9 +66,9 @@ class Args:
     """the frequency of training policy (delayed)"""
     target_network_frequency: int = 1  # Denis Yarats' implementation delays this by 2.
     """the frequency of updates for the target nerworks"""
-    alpha: float = 0.2
+    alpha: float = 0
     """Entropy regularization coefficient."""
-    autotune: bool = True
+    autotune: bool = False
     """automatic tuning of the entropy coefficient"""
 
 
