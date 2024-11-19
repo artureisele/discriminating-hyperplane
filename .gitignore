@@ -41,3 +41,5 @@ RL-DH/runs
 runs/
 videos/
 wandb/
+RL-DH/data/fppo_Retest/
+RL-DH/data/

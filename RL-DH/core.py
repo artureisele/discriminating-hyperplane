@@ -356,7 +356,7 @@ class SafeMLPActorCritic(nn.Module):
             a_dim = a_h.shape[-1]
             a = torch.tensor(self.action_space.sample())
             e = random.random()
-            if e > 0.05:
+            if e >= 0:
                 # project into hyperplane
                 if a_h @ a < b_h:
                     a = a - (((a_h @ a) - b_h) / torch.norm(a, dim=-1)) * a_h

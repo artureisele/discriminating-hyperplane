@@ -71,7 +71,7 @@ class Cartpole(gym.Env):
         return (x, x_dot, theta, theta_dot)
 
     def step(self, action):
-        bonus = int(action >= -1 and action <= 1)
+        bonus = int(action >= -1 and action <= 1)        
         action = np.clip(action, -1, 1)
         assert self.action_space.contains(action), \
             "%r (%s) invalid" % (action, type(action))
@@ -79,10 +79,10 @@ class Cartpole(gym.Env):
         force = self.force_mag * float(action)
         self.state = self.stepPhysics(force)
         x, x_dot, theta, theta_dot = self.state
-        done = x < -self.x_threshold*1.5 \
-            or x > self.x_threshold*1.5 \
-            or theta < -self.theta_threshold_radians*1.5 \
-            or theta > self.theta_threshold_radians*1.5
+        done = x < -self.x_threshold*1 \
+            or x > self.x_threshold*1 \
+            or theta < -self.theta_threshold_radians*1 \
+            or theta > self.theta_threshold_radians*1
         #done = False
 
         if not done:
@@ -90,9 +90,9 @@ class Cartpole(gym.Env):
             and x < self.x_threshold \
             and theta > -self.theta_threshold_radians \
             and theta < self.theta_threshold_radians:
-                reward = 1 + bonus
+                reward = 1 #+ bonus
             else:
-                reward = -1
+                reward = -100
         elif self.steps_beyond_done is None:
             # Pole just fell!
             self.steps_beyond_done = 0

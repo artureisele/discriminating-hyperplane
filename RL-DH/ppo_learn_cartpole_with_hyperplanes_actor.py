@@ -3,7 +3,7 @@ import os
 import random
 import time
 from dataclasses import dataclass
-
+import scipy.signal
 import gymnasium as gym
 import numpy as np
 import torch
@@ -34,7 +34,7 @@ class Args:
     """the wandb's project name"""
     wandb_entity: str = None
     """the entity (team) of wandb's project"""
-    capture_video: bool = True
+    capture_video: bool = False
     """whether to capture videos of the agent performances (check out `videos` folder)"""
     save_model: bool = True
     """whether to save model into the `runs/{run_name}` folder"""
@@ -50,33 +50,33 @@ class Args:
     """total timesteps of the experiments"""
     learning_rate: float = 3e-4
     """the learning rate of the optimizer"""
-    num_envs: int = 1000
+    num_envs: int = 1
     """the number of parallel game environments"""
-    num_steps: int = 20
+    num_steps: int = 4000
     """the number of steps to run in each environment per policy rollout"""
-    anneal_lr: bool = True
+    anneal_lr: bool = False
     """Toggle learning rate annealing for policy and value networks"""
     gamma: float = 0.99
     """the discount factor gamma"""
     gae_lambda: float = 0.95
     """the lambda for the general advantage estimation"""
-    num_minibatches: int = 32
+    num_minibatches: int = 1
     """the number of mini-batches"""
-    update_epochs: int = 10
+    update_epochs: int = 80
     """the K epochs to update the policy"""
     norm_adv: bool = True
     """Toggles advantages normalization"""
     clip_coef: float = 0.2
     """the surrogate clipping coefficient"""
-    clip_vloss: bool = True
+    clip_vloss: bool = False
     """Toggles whether or not to use a clipped loss for the value function, as per the paper."""
     ent_coef: float = 0.0
     """coefficient of the entropy"""
-    vf_coef: float = 0.5
+    vf_coef: float = 1.0
     """coefficient of the value function"""
     max_grad_norm: float = 0.5
     """the maximum norm for the gradient clipping"""
-    target_kl: float = None
+    target_kl: float = 0.01
     """the target KL divergence threshold"""
 
     # to be filled in runtime
@@ -126,11 +126,11 @@ def make_env(env_id, idx, capture_video, run_name, gamma):
             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
         else:
             env = gym.make(env_id)
-        env = gym.wrappers.FlattenObservation(env)  # deal with dm_control's Dict observation space
+        #env = gym.wrappers.FlattenObservation(env)  # deal with dm_control's Dict observation space
         env = gym.wrappers.RecordEpisodeStatistics(env)
         #env = gym.wrappers.ClipAction(env)
-        env = gym.wrappers.NormalizeObservation(env)
-        env = gym.wrappers.TransformObservation(env, lambda obs: np.clip(obs, -10, 10))
+        #env = gym.wrappers.NormalizeObservation(env)
+        #env = gym.wrappers.TransformObservation(env, lambda obs: np.clip(obs, -10, 10))
         #env = gym.wrappers.NormalizeReward(env, gamma=gamma)
         #env = gym.wrappers.TransformReward(env, lambda reward: np.clip(reward, -10, 10))
         return env
@@ -139,8 +139,8 @@ def make_env(env_id, idx, capture_video, run_name, gamma):
 
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
-    torch.nn.init.orthogonal_(layer.weight, std)
-    torch.nn.init.constant_(layer.bias, bias_const)
+    #torch.nn.init.orthogonal_(layer.weight, std)
+    #torch.nn.init.constant_(layer.bias, bias_const)
     return layer
 
 
@@ -148,20 +148,20 @@ class Agent(nn.Module):
     def __init__(self, envs):
         super().__init__()
         self.critic = nn.Sequential(
-            layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), 64)),
+            layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), 256)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, 64)),
+            layer_init(nn.Linear(256, 256)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, 1), std=1.0),
+            layer_init(nn.Linear(256, 1), std=1.0),
         )
         self.actor_mean = nn.Sequential(
-            layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), 64)),
+            layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), 256)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, 64)),
+            layer_init(nn.Linear(256, 256)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, np.prod(envs.single_action_space.shape)), std=0.01),
+            layer_init(nn.Linear(256, np.prod(envs.single_action_space.shape)), std=0.01),
         )
-        self.actor_logstd = nn.Parameter(torch.zeros(1, np.prod(envs.single_action_space.shape)))
+        self.actor_logstd = nn.Parameter(torch.ones(1, np.prod(envs.single_action_space.shape))*-0.5)
 
     def get_value(self, x):
         return self.critic(x)
@@ -224,7 +224,6 @@ if __name__ == "__main__":
     rewards = torch.zeros((args.num_steps, args.num_envs)).to(device)
     dones = torch.zeros((args.num_steps, args.num_envs)).to(device)
     values = torch.zeros((args.num_steps, args.num_envs)).to(device)
-
     # TRY NOT TO MODIFY: start the game
     global_step = 0
     start_time = time.time()
@@ -233,30 +232,37 @@ if __name__ == "__main__":
     next_done = torch.zeros(args.num_envs).to(device)
 
     for iteration in range(1, args.num_iterations + 1):
-        # Annealing the rate if instructed to do so.
+        #Annealing the rate if instructed to do so.
         if args.anneal_lr:
             frac = 1.0 - (iteration - 1.0) / args.num_iterations
             lrnow = frac * args.learning_rate
             optimizer.param_groups[0]["lr"] = lrnow
 
+        k = 0
+        avgReturn = 0
+        path_start_idx = 0
+        ptr = 0
+        advantages = torch.zeros_like(rewards).to(device)
+        returns = torch.zeros_like(rewards).to(device)
         for step in range(0, args.num_steps):
             global_step += args.num_envs
             if (global_step/args.num_envs)%2000==0:
-                model_path = f"runs/{run_name}/{args.exp_name}{(global_step/args.num_envs)/2000}.cleanrl_model"
-                torch.save(agent.state_dict(), model_path)
-                print(f"model saved to {model_path}")
-                episodic_returns = evaluate(
-                    model_path,
-                    make_env,
-                    args.env_id,
-                    eval_episodes=10,
-                    run_name=f"{run_name}-eval",
-                    Model=Agent,
-                    device=device,
-                    gamma=args.gamma,
-                )
-                for idx, episodic_return in enumerate(episodic_returns):
-                    writer.add_scalar("eval/episodic_return", episodic_return, idx)
+                pass
+                #model_path = f"runs/{run_name}/{args.exp_name}{(global_step/args.num_envs)/2000}.cleanrl_model"
+                #torch.save(agent.state_dict(), model_path)
+                #print(f"model saved to {model_path}")
+                #episodic_returns = evaluate(
+                #    model_path,
+                #    make_env,
+                #    args.env_id,
+                #    eval_episodes=10,
+                #    run_name=f"{run_name}-eval",
+                #    Model=Agent,
+                #    device=device,
+                #    gamma=args.gamma,
+                #)
+                #for idx, episodic_return in enumerate(episodic_returns):
+                #    writer.add_scalar("eval/episodic_return", episodic_return, idx)
 
                 
             obs[step] = next_obs
@@ -268,21 +274,65 @@ if __name__ == "__main__":
                 values[step] = value.flatten()
             actions[step] = action
             logprobs[step] = logprob
-
+            
             # TRY NOT TO MODIFY: execute the game and log data.
             next_obs, reward, terminations, truncations, infos = envs.step(action.cpu().numpy())
+            ptr+=1
+            if truncations[0] == True:
+                print("FUUUUCK TRUNCATED")
             next_done = np.logical_or(terminations, truncations)
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(next_done).to(device)
-
+       
             if "final_info" in infos:
                 for info in infos["final_info"]:
                     if info and "episode" in info:
-                        print(f"global_step={global_step}, episodic_return={info['episode']['r']}")
+                        #print(f"global_step={global_step}, episodic_return={info['episode']['r']}")
+                        avgReturn += info['episode']['r']
+                        k+=1
                         writer.add_scalar("charts/episodic_return", info["episode"]["r"], global_step)
                         writer.add_scalar("charts/episodic_length", info["episode"]["l"], global_step)
 
+                        path_slice = slice(path_start_idx, ptr)
+                        rews = torch.cat((rewards[path_slice,0], torch.tensor([0.0], device="cuda:0")))
+
+                        vals = torch.cat((values[path_slice,0], torch.tensor([0.0], device="cuda:0")))
+                        
+                        # the next two lines implement GAE-Lambda advantage calculation
+                        deltas = rews[:-1] + args.gamma * vals[1:] - vals[:-1]
+
+                        def discount_cumsum(x, discount):
+                            return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
+                        deltas = deltas.detach().cpu().numpy()
+                        rews = rews.detach().cpu().numpy()
+                        advantages[path_slice,0] = torch.from_numpy(discount_cumsum(deltas, args.gamma  * args.gae_lambda).copy())
+                        returns[path_slice,0] = torch.from_numpy( (discount_cumsum(rews, args.gamma )[:-1]).copy() ) 
+                        
+                        path_start_idx = ptr 
+
+        _, _, _, boots_trap_value = agent.get_action_and_value(next_obs)                
+        path_slice = slice(path_start_idx, ptr)
+        rews = torch.cat((rewards[path_slice,0], torch.tensor([boots_trap_value], device="cuda:0")))
+
+        vals = torch.cat((values[path_slice,0], torch.tensor([boots_trap_value], device="cuda:0")))
+        
+        # the next two lines implement GAE-Lambda advantage calculation
+        deltas = rews[:-1] + args.gamma * vals[1:] - vals[:-1]
+
+        def discount_cumsum(x, discount):
+            return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
+        deltas = deltas.detach().cpu().numpy()
+        rews = rews.detach().cpu().numpy()
+        advantages[path_slice,0] = torch.from_numpy(discount_cumsum(deltas, args.gamma  * args.gae_lambda).copy())
+        returns[path_slice,0] = torch.from_numpy( (discount_cumsum(rews, args.gamma )[:-1]).copy() ) 
+        
+        path_start_idx = ptr 
+        
+        avgReturn/=k
+        print(f"End of 4000 epoch step: Avg return: {avgReturn}")
         # bootstrap value if not done
+
+        """
         with torch.no_grad():
             next_value = agent.get_value(next_obs).reshape(1, -1)
             advantages = torch.zeros_like(rewards).to(device)
@@ -290,13 +340,20 @@ if __name__ == "__main__":
             for t in reversed(range(args.num_steps)):
                 if t == args.num_steps - 1:
                     nextnonterminal = 1.0 - next_done
-                    nextvalues = next_value
+                    if next_done == False:
+                        nextvalues = next_value
+                    else:
+                        nextvalues = 0
                 else:
                     nextnonterminal = 1.0 - dones[t + 1]
                     nextvalues = values[t + 1]
                 delta = rewards[t] + args.gamma * nextvalues * nextnonterminal - values[t]
+                if nextnonterminal == False:
+                    lastgaelam = 0
                 advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
             returns = advantages + values
+        """
+
 
         # flatten the batch
         b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
@@ -310,7 +367,7 @@ if __name__ == "__main__":
         b_inds = np.arange(args.batch_size)
         clipfracs = []
         for epoch in range(args.update_epochs):
-            np.random.shuffle(b_inds)
+            #np.random.shuffle(b_inds)
             for start in range(0, args.batch_size, args.minibatch_size):
                 end = start + args.minibatch_size
                 mb_inds = b_inds[start:end]
@@ -321,9 +378,10 @@ if __name__ == "__main__":
 
                 with torch.no_grad():
                     # calculate approx_kl http://joschu.net/blog/kl-approx.html
-                    old_approx_kl = (-logratio).mean()
-                    approx_kl = ((ratio - 1) - logratio).mean()
+                    #old_approx_kl = (-logratio).mean()
+                    #approx_kl = ((ratio - 1) - logratio).mean()
                     clipfracs += [((ratio - 1.0).abs() > args.clip_coef).float().mean().item()]
+                    approx_kl = (b_logprobs[mb_inds] - newlogprob).mean().item()
 
                 mb_advantages = b_advantages[mb_inds]
                 if args.norm_adv:
@@ -347,18 +405,22 @@ if __name__ == "__main__":
                     v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
                     v_loss = 0.5 * v_loss_max.mean()
                 else:
-                    v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
+                    v_loss = ((newvalue - b_returns[mb_inds]) ** 2).mean()
 
                 entropy_loss = entropy.mean()
-                loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
+                loss = pg_loss + v_loss * args.vf_coef
 
                 optimizer.zero_grad()
                 loss.backward()
-                nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
+                #nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
                 optimizer.step()
-
-            if args.target_kl is not None and approx_kl > args.target_kl:
-                break
+            #print(args.target_kl)
+            #print(approx_kl)
+            #print(args.batch_size)
+            #print(args.minibatch_size)
+            #if args.target_kl is not None and approx_kl > 1.2* args.target_kl:
+            #    print(f"Early Stopping due KL at step {epoch}")
+            #    break
 
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
         var_y = np.var(y_true)
@@ -369,8 +431,8 @@ if __name__ == "__main__":
         writer.add_scalar("losses/value_loss", v_loss.item(), global_step)
         writer.add_scalar("losses/policy_loss", pg_loss.item(), global_step)
         writer.add_scalar("losses/entropy", entropy_loss.item(), global_step)
-        writer.add_scalar("losses/old_approx_kl", old_approx_kl.item(), global_step)
-        writer.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
+        writer.add_scalar("losses/old_approx_kl", -1, global_step)
+        writer.add_scalar("losses/approx_kl", approx_kl, global_step)
         writer.add_scalar("losses/clipfrac", np.mean(clipfracs), global_step)
         writer.add_scalar("losses/explained_variance", explained_var, global_step)
         print("SPS:", int(global_step / (time.time() - start_time)))

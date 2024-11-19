@@ -25,9 +25,13 @@ def evaluate(eval_env, env_steps_count,ac):
         d = False
         steps = 0
         o = eval_env.reset()
+        print("Reward+Done Eval")
         while(not (d or (steps%4000==0 and steps != 0)) ):
             a, a_h, b_h, v, vc, logp_a, logp_b = ac.stepEval(torch.as_tensor(o, dtype=torch.float32))
             next_o, r, d, info = eval_env.step(a)
+            print("Reward+Done Eval")
+            print(r)
+            print(d)
             evalReturn+=r
             steps +=1
             #eval_env.render()
@@ -91,7 +95,8 @@ class PPOBuffer:
     for calculating the advantages of state-action pairs.
     """
 
-    def __init__(self, obs_dim, act_dim, size, gamma=0.99, lam=0.97):
+    def __init__(self, obs_dim, act_dim, size, gamma=0.99, lam=0.95):
+        lam = 0.95
         self.obs_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
         self.act_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
         self.a_h_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
@@ -152,22 +157,22 @@ class PPOBuffer:
 
         path_slice = slice(self.path_start_idx, self.ptr)
         rews = np.append(self.rew_buf[path_slice], last_val)
-        crews = np.append(self.crew_buf[path_slice], last_cval)
+        #crews = np.append(self.crew_buf[path_slice], last_cval)
 
         vals = np.append(self.val_buf[path_slice], last_val)
-        cvals = np.append(self.cval_buf[path_slice], last_cval)
+        #cvals = np.append(self.cval_buf[path_slice], last_cval)
         
         # the next two lines implement GAE-Lambda advantage calculation
         deltas = rews[:-1] + self.gamma * vals[1:] - vals[:-1]
-        cdeltas = crews[:-1] + self.gamma * cvals[1:] - cvals[:-1]
+        #cdeltas = crews[:-1] + self.gamma * cvals[1:] - cvals[:-1]
 
         self.adv_buf[path_slice] = core.discount_cumsum(deltas, self.gamma * self.lam)
-        self.cadv_buf[path_slice] = core.discount_cumsum(cdeltas, self.gamma * self.lam)
+        #self.cadv_buf[path_slice] = core.discount_cumsum(cdeltas, self.gamma * self.lam)
 
         
         # the next line computes rewards-to-go, to be targets for the value function
         self.ret_buf[path_slice] = core.discount_cumsum(rews, self.gamma)[:-1]
-        self.cret_buf[path_slice] = core.discount_cumsum(crews, self.gamma)[:-1]
+        #self.cret_buf[path_slice] = core.discount_cumsum(crews, self.gamma)[:-1]
         
         self.path_start_idx = self.ptr
 
@@ -351,17 +356,22 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         cost_limit =25
         # Policy loss
         pi_a, pi_b, logp_a, logp_b = ac.pi(obs, a_h, b_h) # use s-actor for new log prob
-        ratio_a = torch.exp(logp_a - logp_a_old)
-        ratio_b = torch.exp(logp_b - logp_b_old)
+        
+        #ratio_a = torch.exp(logp_a - logp_a_old)
+        #ratio_b = torch.exp(logp_b - logp_b_old)
+        ratio_t = torch.exp(logp_a + logp_b - logp_a_old - logp_b_old)
 
-        clip_adv_a = torch.clamp(ratio_a, 1-clip_ratio, 1+clip_ratio) * adv
-        clip_adv_b = torch.clamp(ratio_b, 1-clip_ratio, 1+clip_ratio) * adv
-        loss_rpi_a = (torch.min(ratio_a * adv, clip_adv_a)).mean()
-        loss_rpi_b = (torch.min(ratio_b * adv, clip_adv_b)).mean()
+        #clip_adv_a = torch.clamp(ratio_a, 1-clip_ratio, 1+clip_ratio) * adv
+        #clip_adv_b = torch.clamp(ratio_b, 1-clip_ratio, 1+clip_ratio) * adv
+        clip_adv_t = torch.clamp(ratio_t, 1-clip_ratio, 1+clip_ratio) * adv
+        #loss_rpi_a = (torch.min(ratio_a * adv, clip_adv_a)).mean()
+        #loss_rpi_b = (torch.min(ratio_b * adv, clip_adv_b)).mean()
+        loss_rpi_t = (torch.max(-1*ratio_t * adv, -1*clip_adv_t)).mean()
 
 
         # doesnt matter for nnow
-        loss_cpi = ratio_a*cadv + ratio_b*cadv
+        #loss_cpi = ratio_a*cadv + ratio_b*cadv
+        loss_cpi = loss_rpi_t * cadv
         loss_cpi = loss_cpi.mean()
         
         p = softplus(penalty_param)
@@ -370,9 +380,9 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         else:
             penalty_item = 0
       
-        pi_objective = loss_rpi_a + loss_rpi_b - penalty_item*loss_cpi
+        pi_objective = loss_rpi_t - penalty_item*loss_cpi
         pi_objective = pi_objective/(1+penalty_item)
-        loss_pi = -pi_objective
+        loss_pi = pi_objective
 
 
         cost_deviation = (cur_cost - cost_limit)
@@ -385,7 +395,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Useful extra info
         approx_kl = (logp_a_old - logp_a).mean().item()
         ent = pi_a.entropy().mean().item()
-        clipped = ratio_a.gt(1+clip_ratio) | ratio_a.lt(1-clip_ratio)
+        clipped = ratio_t.gt(1+clip_ratio) | ratio_t.lt(1-clip_ratio)
         clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
         pi_info = dict(kl=approx_kl, ent=ent, cf=clipfrac)
 
@@ -399,14 +409,14 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Set up optimizers for policy and value function
     pi_lr = 3e-4
-    pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
+    pi_optimizer = Adam(ac.parameters(), lr=pi_lr, eps=1e-5)
     penalty_param = torch.tensor(1.0,requires_grad=True).float()
     penalty = softplus(penalty_param)
     
 
     penalty_lr = 5e-2
     penalty_optimizer = Adam([penalty_param], lr=penalty_lr)
-    vf_lr = 1e-3
+    vf_lr = 3e-4
     vf_optimizer = Adam(ac.v.parameters(), lr=vf_lr)
     cvf_optimizer = Adam(ac.vc.parameters(),lr=vf_lr)
     # Set up model saving
@@ -421,14 +431,14 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         data['cur_penalty'] = penalty_param
         pi_l_old, cost_dev, pi_info_old = compute_loss_pi(data)
         #print(penalty_param)
-        loss_penalty = -penalty_param*cost_dev
+        #loss_penalty = -penalty_param*cost_dev
 
         
-        penalty_optimizer.zero_grad()
-        loss_penalty.backward()
-        mpi_avg_grads(penalty_param)
-        penalty_optimizer.step()
-        #print(penalty_param)
+        #penalty_optimizer.zero_grad()
+        #loss_penalty.backward()
+        #mpi_avg_grads(penalty_param)
+        #penalty_optimizer.step()
+        ##print(penalty_param)
 
         #penalty = softplus(penalty_param)
 
@@ -448,36 +458,22 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Train policy with multiple steps of gradient descent
         train_pi_iters=80
         for i in range(train_pi_iters):
-            pi_optimizer.zero_grad()
             loss_pi, _,pi_info = compute_loss_pi(data)
             kl = mpi_avg(pi_info['kl'])
-            if kl > 1.2 * target_kl:
-                logger.log('Early stopping at step %d due to reaching max kl.'%i)
-                break
 
-            loss_pi.backward()
+            #if kl > 1.2 * target_kl:
+            #    logger.log('Early stopping at step %d due to reaching max kl.'%i)
+            #    break
+            loss_v, loss_vc = compute_loss_v(data)
+            loss_v = 0
+            loss =loss_pi+loss_v
+            pi_optimizer.zero_grad()
+            loss.backward()
             mpi_avg_grads(ac.pi)    # average grads across MPI processes
             pi_optimizer.step()
 
+
         logger.store(StopIter=i)
-
-        # Value function learning
-        train_v_iters=80
-        for i in range(train_v_iters):
-            
-            
-
-            loss_v, loss_vc = compute_loss_v(data)
-            vf_optimizer.zero_grad()
-            loss_v.backward()
-            mpi_avg_grads(ac.v)   # average grads across MPI processes
-            vf_optimizer.step()
-
-            cvf_optimizer.zero_grad()
-            loss_vc.backward()
-            mpi_avg_grads(ac.vc)
-            cvf_optimizer.step()
-
         # Log changes from update
         kl, ent, cf = pi_info['kl'], pi_info_old['ent'], pi_info['cf']
         wandb.log(data = {
@@ -488,12 +484,12 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             "agent_train/Entropy": ent,
             "agent_train/ClipFrac": cf,
             "agent_train/DeltaLossPi": (loss_pi.item() - pi_l_old),
-            "agent_train/DeltaLossV": (loss_v.item() - v_l_old)
+            "agent_train/DeltaLossV": (loss_v - v_l_old)
         })
         logger.store(LossPi=pi_l_old, LossV=v_l_old,
                      KL=kl, Entropy=ent, ClipFrac=cf,
                      DeltaLossPi=(loss_pi.item() - pi_l_old),
-                     DeltaLossV=(loss_v.item() - v_l_old))
+                     DeltaLossV=(loss_v - v_l_old))
         
 
 
@@ -503,13 +499,18 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     ep_ret,ep_cret, ep_len = 0,0,0
     env_steps_count = 0
     # Main loop: collect experience in env and update/log each epoch
-    batch_size= 500
-    borders = np.zeros((batch_size,4))
-    frames=[]
     for epoch in range(epochs):
         for t in range(local_steps_per_epoch):
             a, a_h, b_h, v, vc, logp_a, logp_b = ac.step(torch.as_tensor(o, dtype=torch.float32))
-
+            a = torch.tensor(env.action_space.sample())
+            a_h = torch.tensor(a_h)
+            b_h = torch.tensor(b_h)
+            import random
+            e = random.random()
+            if e >= 0:
+                # project into hyperplane
+                if a_h @ a < b_h:
+                    a = a - (((a_h @ a) - b_h) / torch.norm(a, dim=-1)) * a_h
             next_o, r, d, info = env.step(a)
             c = info['cost']
             ep_ret += r
@@ -590,7 +591,7 @@ if __name__ == '__main__':
     parser.add_argument('--cpu', type=int, default=4)
     parser.add_argument('--steps', type=float, default=500000)
     parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--exp_name', type=str, default='fppo_Retest')
+    parser.add_argument('--exp_name', type=str, default='fppo_direct_cut_no_bonus_noLossPenalWithCosts_unifylosspolicy')
     args = parser.parse_args()
 
     if args.env == 'CartPole':
@@ -608,7 +609,7 @@ if __name__ == '__main__':
         config=args,
         job_type="cleanRL",
         group="cleanRL",
-        name="Cartpole_Retest"
+        name="fppo_direct_cut_no_bonus_noLossPenalWithCosts_unifylosspolicy"
     )
     #mpi_fork(args.cpu)  # run parallel code with mpi
 

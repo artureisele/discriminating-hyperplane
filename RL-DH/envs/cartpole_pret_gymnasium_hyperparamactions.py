@@ -152,11 +152,11 @@ class CartPoleEnvParamActions(gym.Env[np.ndarray, Union[int, np.ndarray]]):
             or theta > self.theta_threshold_radians
         )
         if not terminated:
-            reward = 1.0 + (1 if a_h @ uniform_action >= b_h else 0)
+            reward = 1.0 #+ #(1 if a_h @ uniform_action >= b_h else 0)
         elif self.steps_beyond_terminated is None:
             # Pole just fell!
             self.steps_beyond_terminated = 0
-            reward = -1
+            reward = -100
         else:
             if self.steps_beyond_terminated == 0:
                 logger.warn(
