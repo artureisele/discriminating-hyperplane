@@ -1,15 +1,69 @@
-import gym
-import numpy as np
-import math
-from gym import spaces, logger
-from gym.utils import seeding
-from sklearn import svm
-from sklearn.svm import LinearSVC
-import time
-import copy
+"""
+Gymnasium version of cart-pole environment of this repo
+"""
 
-class Cartpole(gym.Env):
-    def __init__(self, inv_set, disc_steps, focus=0.0):
+import math
+from typing import Optional, Tuple, Union
+
+import numpy as np
+
+import gymnasium as gym
+from gymnasium import logger, spaces
+from gymnasium.envs.classic_control import utils
+from gymnasium.error import DependencyNotInstalled
+from gymnasium.vector import VectorEnv
+from gymnasium.vector.utils import batch_space
+
+
+class CartPoleEnvParamActions(gym.Env[np.ndarray, Union[int, np.ndarray]]):
+    """
+    
+    | Num | Observation           | Min                 | Max               |
+    |-----|-----------------------|---------------------|-------------------|
+    | 0   | Cart Position         | -4.8                | 4.8               |
+    | 1   | Cart Velocity         | -Inf                | Inf               |
+    | 2   | Pole Angle            | ~ -0.418 rad (-24°) | ~ 0.418 rad (24°) |
+    | 3   | Pole Angular Velocity | -Inf                | Inf               |
+
+    **Note:** While the ranges above denote the possible values for observation space of each element,
+        it is not reflective of the allowed values of the state space in an unterminated episode. Particularly:
+    -  The cart x-position (index 0) can be take values between `(-4.8, 4.8)`, but the episode terminates
+       if the cart leaves the `(-2.4, 2.4)` range.
+    -  The pole angle can be observed between  `(-.418, .418)` radians (or **±24°**), but the episode terminates
+       if the pole angle is not in the range `(-.2095, .2095)` (or **±12°**)
+
+    ## Starting State
+    All observations are assigned a uniformly random value in `(-0.05, 0.05)`
+
+    ## Episode End
+    The episode ends if any one of the following occurs:
+
+    1. Termination: Pole Angle is greater than ±12°
+    2. Termination: Cart Position is greater than ±2.4 (center of the cart reaches the edge of the display)
+    3. Truncation: Episode length is greater than 500
+
+    ## Arguments
+
+    Cartpole only has `render_mode` as a keyword for `gymnasium.make`.
+    On reset, the `options` parameter allows the user to change the bounds used to determine the new random state.
+
+    ```python
+    from gymnasium.envs.registration import register
+    register(
+        id="customEnvs/CartPoleEnv-v0",
+        entry_point="envs/cartpole_pret_gymnasium:CartPoleEnv",
+    )
+    >>> import gymnasium as gym
+    >>> env = gym.make("customEnvs/CartPoleEnv-v0", render_mode="rgb_array")
+    >>> env
+    <TimeLimit<OrderEnforcing<PassiveEnvChecker<CartPoleEnv<CartPole-v1>>>>>
+    >>> env.reset(seed=123, options={"low": -0.1, "high": 0.1})  # default low=-0.05, high=0.05
+    """
+    metadata = {
+        "render_modes": ["human", "rgb_array"],
+        "render_fps": 50,
+    }
+    def __init__(self, render_mode: Optional[str] = None, focus:float=0.0):
         self.gravity = 9.8
         self.masscart = 1.0
         self.masspole = 0.1
@@ -35,26 +89,29 @@ class Cartpole(gym.Env):
             np.finfo(np.float32).max,
             self.theta_threshold_radians * 2,
             np.finfo(np.float32).max])
-
-        self.action_space = spaces.Box(
-            low=self.min_action,
-            high=self.max_action,
-            shape=(1,)
-        )
         self.observation_space = spaces.Box(-high, high)
 
-        self.seed()
-        self.viewer = None
-        self.state = None
+        #a should be between -1 and 1 -> but actually vector with norm 1
+        #b should be between -X and X where X is the maximum action magnitude of the real actions
+        action_low = np.array([-1])
+        action_high = np.array([1])
+        #a,b of a hyperplane
+        self.action_space = spaces.Box(
+            low=action_low,
+            high=action_high,
+            shape=(1,)
+        )
 
-        self.steps_beyond_done = None
+        self.render_mode = render_mode
 
-        self.inv_set = inv_set
-        self.disc_steps = disc_steps
+        self.screen_width = 600
+        self.screen_height = 400
+        self.screen = None
+        self.clock = None
+        self.isopen = True
+        self.state: np.ndarray | None = None
 
-    def seed(self, seed=None):
-        self.np_random, seed = seeding.np_random(seed)
-        return [seed]
+        self.steps_beyond_terminated = None
 
     def stepPhysics(self, force):
         x, x_dot, theta, theta_dot = self.state
@@ -71,187 +128,163 @@ class Cartpole(gym.Env):
         return (x, x_dot, theta, theta_dot)
 
     def step(self, action):
-        bonus = int(action >= -1 and action <= 1)
-        action = np.clip(action, -1, 1)
-        assert self.action_space.contains(action), \
-            "%r (%s) invalid" % (action, type(action))
-        # Cast action to float to strip np trappings
+        assert self.action_space.contains(action), f"{action!r} ({type(action)}) invalid"
+        assert self.state is not None, "Call reset before using step method."
         force = self.force_mag * float(action)
         self.state = self.stepPhysics(force)
         x, x_dot, theta, theta_dot = self.state
-        done = x < -self.x_threshold*1.5 \
-            or x > self.x_threshold*1.5 \
-            or theta < -self.theta_threshold_radians*1.5 \
-            or theta > self.theta_threshold_radians*1.5
-        #done = False
-
-        if not done:
-            if x > -self.x_threshold \
-            and x < self.x_threshold \
-            and theta > -self.theta_threshold_radians \
-            and theta < self.theta_threshold_radians:
-                reward = 1 + bonus
-            else:
-                reward = -1
-        elif self.steps_beyond_done is None:
+        self.state = np.array((x, x_dot, theta, theta_dot), dtype=np.float64)
+        terminated = bool(
+            x < -self.x_threshold
+            or x > self.x_threshold
+            or theta < -self.theta_threshold_radians
+            or theta > self.theta_threshold_radians
+        )
+        if not terminated:
+            reward = 1.0 
+        elif self.steps_beyond_terminated is None:
             # Pole just fell!
-            self.steps_beyond_done = 0
+            self.steps_beyond_terminated = 0
             reward = -100
         else:
-            if self.steps_beyond_done == 0:
-                logger.warn("""
-You are calling 'step()' even though this environment has already returned
-done = True. You should always call 'reset()' once you receive 'done = True'
-Any further steps are undefined behavior.
-                """)
-            self.steps_beyond_done += 1
-            reward = 0.0
-
-        return np.array(self.state), reward, done, {'cost' : self.cost()}
+            if self.steps_beyond_terminated == 0:
+                logger.warn(
+                    "You are calling 'step()' even though this environment has already returned terminated = True. "
+                    "You should always call 'reset()' once you receive 'terminated = True' -- any further steps are undefined behavior."
+                )
+            self.steps_beyond_terminated += 1
+            reward=-1
+        if self.render_mode == "human":
+            self.render()
+        return np.array(self.state, dtype=np.float32), reward, terminated, False, {}
     
-    def cost(self):
-        x, x_dot, theta, theta_dot = self.state
-        return int(x < -self.x_threshold \
-            or x > self.x_threshold \
-            or theta < -self.theta_threshold_radians \
-            or theta > self.theta_threshold_radians)
-        # if action < -1 or action > 1:
-        #     return 1
 
-    def reset(self, state=None):
-        if state is not None:
-            self.state = state
-        else:
-            self.state = self.np_random.uniform(low=-0.05, high=0.05, size=(4,))
-        self.steps_beyond_done = None
-        return np.array(self.state)
+    def reset(
+        self,
+        *,
+        seed: Optional[int] = None,
+        options: Optional[dict] = None,
+    ):
+        """
+        For options, tuple bounds or (4)np array state are avaible
+        """
+        super().reset(seed=seed)
+        if options is None:
+            options = {}
+
+        # Note that if you use custom reset bounds, it may lead to out-of-bound
+        # state/observations.
+        low, high = options.get("bounds",(-0.05,0.05))
+        self.state = options.get("state", self.np_random.uniform(low=low, high=high, size=(4,)))
+
+        self.steps_beyond_terminated = None
+
+        if self.render_mode == "human":
+            self.render()
+        return np.array(self.state, dtype=np.float32), {}
         
-    def run_system(self, x_0, num_steps, controller):
-        x_hist = []
-        x_t = self.reset(x_0)
-        term = False
-        step = 0
-        while not (term) and step <= num_steps:
-            u = controller.forward(x_t, step)
-            if u >= 1:
-                u = [1]
-            elif u <= -1:
-                u = [-1]
-            u = np.float32(u)
-            x_t, rew, term, info = self.step(u)
-            x_hist.append(x_t)
-            step += 1
-        return np.array(x_hist)
     
-    def next_states(self, states, inputs):
-        # loop, vectorized gym, remake source code to be vectorized???
-        num_states = states.shape[0]
-        num_inputs = inputs.shape[1]
-        states = np.repeat(states, num_inputs, axis=0).reshape(num_states, num_inputs, 4)
-        for step in range(self.disc_steps):
-            next_states = np.zeros((num_states, num_inputs, 4))
-            for i in range(num_states):
-                for j in range(num_inputs):
-                    state = states[i, j]
-                    state = self.reset(state)
-                    input = np.float32(inputs[i, j])
-                    next_state, _, _, _ = self.step(input)
-                    next_states[i, j] = next_state
-            states = next_states
-        return next_states
-    
-    def sample_states(self, num_states):
-        pos = np.random.uniform(-4.8, 4.8, num_states)
-        vel = np.random.uniform(-5, 5, num_states)
-        theta = np.random.uniform(-.418, .418, num_states)
-        theta_dot = np.random.uniform(-1, 1, num_states)
-        states = np.column_stack((pos, vel, theta, theta_dot))
-        states = states[self.inv_set.forward(states) > 0]
-        return states
+    def render(self):
+        if self.render_mode is None:
+            assert self.spec is not None
+            gym.logger.warn(
+                "You are calling render method without specifying any render mode. "
+                "You can specify the render_mode at initialization, "
+                f'e.g. gym.make("{self.spec.id}", render_mode="rgb_array")'
+            )
+            return
 
-    def sample_inputs(self, states, num_inputs):
-        # sample ints or cont values????
-        num_states = states.shape[0]
-        inputs = np.random.uniform(-1, 1, num_states*num_inputs).reshape((num_states, num_inputs, 1))
-        return inputs
-    
-    def label_inputs(self, states, inputs):
-        num_states = states.shape[0]
-        num_inputs = inputs.shape[1]
-        env_copy = copy.deepcopy(self)
-        next_states = env_copy.next_states(states, inputs)
-        labels = np.sign(self.inv_set.forward(next_states.reshape(-1, 4))).reshape(num_states, num_inputs)
-        return labels
-    
-    def label_state(self, inputs, input_labels):
-        if np.all(input_labels == 1.0):
-            a = np.array([1])
-            b = np.array([-1])
-        elif np.all(input_labels == -1.0):
-            a = np.array([1])
-            b = np.array([1])
-        else: 
-            lsvc = LinearSVC(verbose=0, class_weight={-1:2, 1:1})
-            lsvc.fit(inputs.reshape(-1, 1), np.ravel(input_labels.reshape(-1, 1)))
-            a=lsvc.coef_[0]
-            b=-lsvc.intercept_
-        return a, b
-    
-    def sample_data(self, num_states, num_inputs):
-        states = self.sample_states(num_states)
-        while len(states) <= num_states:
-            states = np.vstack((states, self.sample_states(num_states)))
-        inputs = self.sample_inputs(states, num_inputs)
-        labels = self.label_inputs(states, inputs)
-        return states[:num_states], inputs[:num_states], labels[:num_states]
-    
-    def render(self, mode='human'):
-        screen_width = 600
-        screen_height = 400
+        try:
+            import pygame
+            from pygame import gfxdraw
+        except ImportError as e:
+            raise DependencyNotInstalled(
+                'pygame is not installed, run `pip install "gymnasium[classic-control]"`'
+            ) from e
+        if self.screen is None:
+            pygame.init()
+            if self.render_mode == "human":
+                pygame.display.init()
+                self.screen = pygame.display.set_mode(
+                    (self.screen_width, self.screen_height)
+                )
+            else:  # mode == "rgb_array"
+                self.screen = pygame.Surface((self.screen_width, self.screen_height))
+        if self.clock is None:
+            self.clock = pygame.time.Clock()
 
         world_width = self.x_threshold * 2
-        scale = screen_width /world_width
+        scale = self.screen_width / world_width
         carty = 100  # TOP OF CART
         polewidth = 10.0
         polelen = scale * 1.0
         cartwidth = 50.0
         cartheight = 30.0
-
-        if self.viewer is None:
-            from gym.envs.classic_control import rendering
-            self.viewer = rendering.Viewer(screen_width, screen_height)
-            l, r, t, b = -cartwidth / 2, cartwidth / 2, cartheight / 2, -cartheight / 2
-            axleoffset = cartheight / 4.0
-            cart = rendering.FilledPolygon([(l, b), (l, t), (r, t), (r, b)])
-            self.carttrans = rendering.Transform()
-            cart.add_attr(self.carttrans)
-            self.viewer.add_geom(cart)
-            l, r, t, b = -polewidth / 2, polewidth / 2, polelen-polewidth / 2, -polewidth / 2
-            pole = rendering.FilledPolygon([(l, b), (l, t), (r, t), (r, b)])
-            pole.set_color(.8, .6, .4)
-            self.poletrans = rendering.Transform(translation=(0, axleoffset))
-            pole.add_attr(self.poletrans)
-            pole.add_attr(self.carttrans)
-            self.viewer.add_geom(pole)
-            self.axle = rendering.make_circle(polewidth / 2)
-            self.axle.add_attr(self.poletrans)
-            self.axle.add_attr(self.carttrans)
-            self.axle.set_color(.5, .5, .8)
-            self.viewer.add_geom(self.axle)
-            self.track = rendering.Line((0, carty), (screen_width, carty))
-            self.track.set_color(0, 0, 0)
-            self.viewer.add_geom(self.track)
-
         if self.state is None:
             return None
-
         x = self.state
-        cartx = x[0] * scale + screen_width / 2.0  # MIDDLE OF CART
-        self.carttrans.set_translation(cartx, carty)
-        self.poletrans.set_rotation(-x[2])
 
-        return self.viewer.render(return_rgb_array=(mode == 'rgb_array'))
+        self.surf = pygame.Surface((self.screen_width, self.screen_height))
+        self.surf.fill((255, 255, 255))
+
+        l, r, t, b = -cartwidth / 2, cartwidth / 2, cartheight / 2, -cartheight / 2
+        axleoffset = cartheight / 4.0
+        cartx = x[0] * scale + self.screen_width / 2.0  # MIDDLE OF CART
+        carty = 100  # TOP OF CART
+        cart_coords = [(l, b), (l, t), (r, t), (r, b)]
+        cart_coords = [(c[0] + cartx, c[1] + carty) for c in cart_coords]
+        gfxdraw.aapolygon(self.surf, cart_coords, (0, 0, 0))
+        gfxdraw.filled_polygon(self.surf, cart_coords, (0, 0, 0))
+
+        l, r, t, b = (
+            -polewidth / 2,
+            polewidth / 2,
+            polelen - polewidth / 2,
+            -polewidth / 2,
+        )
+
+        pole_coords = []
+        for coord in [(l, b), (l, t), (r, t), (r, b)]:
+            coord = pygame.math.Vector2(coord).rotate_rad(-x[2])
+            coord = (coord[0] + cartx, coord[1] + carty + axleoffset)
+            pole_coords.append(coord)
+        gfxdraw.aapolygon(self.surf, pole_coords, (202, 152, 101))
+        gfxdraw.filled_polygon(self.surf, pole_coords, (202, 152, 101))
+
+        gfxdraw.aacircle(
+            self.surf,
+            int(cartx),
+            int(carty + axleoffset),
+            int(polewidth / 2),
+            (129, 132, 203),
+        )
+        gfxdraw.filled_circle(
+            self.surf,
+            int(cartx),
+            int(carty + axleoffset),
+            int(polewidth / 2),
+            (129, 132, 203),
+        )
+
+        gfxdraw.hline(self.surf, 0, self.screen_width, carty, (0, 0, 0))
+
+        self.surf = pygame.transform.flip(self.surf, False, True)
+        self.screen.blit(self.surf, (0, 0))
+        if self.render_mode == "human":
+            pygame.event.pump()
+            self.clock.tick(self.metadata["render_fps"])
+            pygame.display.flip()
+
+        elif self.render_mode == "rgb_array":
+            return np.transpose(
+                np.array(pygame.surfarray.pixels3d(self.screen)), axes=(1, 0, 2)
+            )
+
 
     def close(self):
-        if self.viewer:
-            self.viewer.close()
+        if self.screen is not None:
+            import pygame
+
+            pygame.display.quit()
+            pygame.quit()
+            self.isopen = False

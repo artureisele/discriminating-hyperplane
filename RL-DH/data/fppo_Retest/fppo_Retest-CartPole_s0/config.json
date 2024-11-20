@@ -7,14 +7,14 @@
     },
     "actor_critic":	"SafeMLPActorCritic",
     "clip_ratio":	0.2,
-    "env_fn":	"<function <lambda> at 0x77895aae6c10>",
+    "env_fn":	"thunk",
     "epochs":	125,
     "exp_name":	"fppo_Retest",
     "gamma":	0.99,
     "lagrangian":	false,
     "lam":	0.97,
     "logger":	{
-        "<utils.logx.EpochLogger object at 0x778959cd8490>":	{
+        "<utils.logx.EpochLogger object at 0x7a98305a6cd0>":	{
             "epoch_dict":	{},
             "exp_name":	"fppo_Retest",
             "first_row":	true,

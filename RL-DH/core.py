@@ -1,6 +1,6 @@
 import numpy as np
 import scipy.signal
-from gym.spaces import Box, Discrete
+from gymnasium.spaces import Box, Discrete
 
 import torch
 import torch.nn as nn
@@ -322,32 +322,12 @@ class SafeMLPActorCritic(nn.Module):
             self.pi = SafeMLPGaussianActor(obs_dim, action_space.shape[0], hidden_sizes, activation)
         elif isinstance(action_space, Discrete):
             self.pi = MLPCategoricalActor(obs_dim, action_space.n, hidden_sizes, activation)
+        else:
+            print("Action Space not supported!")
 
         # build value function
         self.v  = MLPCritic(obs_dim, hidden_sizes, activation)
-        self.vc = MLPCritic(obs_dim, hidden_sizes, activation)
         self.action_space = action_space
-
-    def step(self, obs):
-        with torch.no_grad():
-            pi_a, pi_b = self.pi._distribution(obs)
-            a_h, b_h = pi_a.sample(), pi_b.sample()
-            if a_h > 0:
-                left, right = b_h/a_h, max(1, b_h/a_h+1)
-            else:
-                left, right = min(-1, b_h/a_h-1), b_h/a_h
-            if left >= right:
-                left, right = -1, 1
-            e = random.random()
-            if e > 0.01:
-                pi_action = Uniform(left, right)
-            else:
-                pi_action = Uniform(-1, 1)
-            a = pi_action.sample().view(-1)
-            logp_a, logp_b = self.pi._log_prob_from_distribution(pi_a, a_h, pi_b, b_h)
-            v = self.v(obs)
-            vc = self.vc(obs)
-        return a.numpy(), a_h.numpy(), b_h.numpy(), v.numpy(), vc.numpy(), logp_a.numpy(), logp_b.numpy()
     
     def step(self, obs):
         with torch.no_grad():
@@ -362,8 +342,8 @@ class SafeMLPActorCritic(nn.Module):
                     a = a - (((a_h @ a) - b_h) / torch.norm(a, dim=-1)) * a_h
             logp_a, logp_b = self.pi._log_prob_from_distribution(pi_a, a_h, pi_b, b_h)
             v = self.v(obs)
-            vc = self.vc(obs)
-        return a.numpy(), a_h.numpy(), b_h.numpy(), v.numpy(), vc.numpy(), logp_a.numpy(), logp_b.numpy()
+            a = torch.clip(a, torch.tensor(-1), torch.tensor(1))
+        return a.numpy(), a_h.numpy(), b_h.numpy(), v.numpy(), logp_a.numpy(), logp_b.numpy()
     def stepEval(self, obs):
         with torch.no_grad():
             pi_a, pi_b = self.pi._distribution(obs)
@@ -375,7 +355,7 @@ class SafeMLPActorCritic(nn.Module):
                 a = a - (((a_h @ a) - b_h) / torch.norm(a, dim=-1)) * a_h
             logp_a, logp_b = self.pi._log_prob_from_distribution(pi_a, a_h, pi_b, b_h)
             v = self.v(obs)
-            vc = self.vc(obs)
-        return a.numpy(), a_h.numpy(), b_h.numpy(), v.numpy(), vc.numpy(), logp_a.numpy(), logp_b.numpy()
+            a = torch.clip(a, torch.tensor(-1), torch.tensor(1))
+        return a.numpy(), a_h.numpy(), b_h.numpy(), v.numpy(), logp_a.numpy(), logp_b.numpy()
     def act(self, obs):
         return self.step(obs)[0]

@@ -3,15 +3,19 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import torch
 from torch.optim import Adam
-import gym
+import gymnasium
+from gymnasium.envs.registration import register
 import time
 import  core
 from utils.logx import EpochLogger
 from utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
 from torch.nn.functional import softplus
-from envs.cartpole_pret import Cartpole
-Cartpole(0, 0, focus=0)
+from envs.cartpole_pret import CartPoleEnvParamActions
+register(
+    id="customEnvs/CartPoleEnvParamActions",
+    entry_point="envs.cartpole_pret:CartPoleEnvParamActions",
+)
 import math
 #from envs.HalhCheetah_pret import HalfCheetahEnv
 torch.autograd.set_detect_anomaly(True)
@@ -24,10 +28,10 @@ def evaluate(eval_env, env_steps_count,ac):
     for i in range(evalIters):
         d = False
         steps = 0
-        o = eval_env.reset()
+        o, _ = eval_env.reset()
         while(not (d or (steps%4000==0 and steps != 0)) ):
-            a, a_h, b_h, v, vc, logp_a, logp_b = ac.stepEval(torch.as_tensor(o, dtype=torch.float32))
-            next_o, r, d, info = eval_env.step(a)
+            a, a_h, b_h, v, logp_a, logp_b = ac.stepEval(torch.as_tensor(o, dtype=torch.float32))
+            next_o, r, d,truncated, info = eval_env.step(a)
             evalReturn+=r
             steps +=1
             #eval_env.render()
@@ -98,16 +102,12 @@ class PPOBuffer:
         self.b_h_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
         
         self.adv_buf = np.zeros(size, dtype=np.float32)
-        self.cadv_buf = np.zeros(size, dtype=np.float32)
 
         self.rew_buf = np.zeros(size, dtype=np.float32)
-        self.crew_buf = np.zeros(size, dtype=np.float32)
 
         self.ret_buf = np.zeros(size, dtype=np.float32)
-        self.cret_buf = np.zeros(size, dtype=np.float32)
 
         self.val_buf = np.zeros(size, dtype=np.float32)
-        self.cval_buf = np.zeros(size, dtype=np.float32)
         
         self.logp_a_buf = np.zeros(size, dtype=np.float32)
         self.logp_b_buf = np.zeros(size, dtype=np.float32)
@@ -115,7 +115,7 @@ class PPOBuffer:
         self.ptr, self.path_start_idx, self.max_size = 0, 0, size
 
         #buf.store(   o, a, r, c, v,vc, logp)
-    def store(self, obs, act, a_h, b_h, rew, crew, val,cval, logp_a, logp_b):
+    def store(self, obs, act, a_h, b_h, rew, val, logp_a, logp_b):
         """
         Append one timestep of agent-environment interaction to the buffer.
         """
@@ -123,10 +123,8 @@ class PPOBuffer:
         self.obs_buf[self.ptr] = obs
         self.act_buf[self.ptr] = act
         self.rew_buf[self.ptr] = rew
-        self.crew_buf[self.ptr] = crew
 
         self.val_buf[self.ptr] = val
-        self.cval_buf[self.ptr] = cval
 
         self.logp_a_buf[self.ptr] = logp_a
         self.logp_b_buf[self.ptr] = logp_b
@@ -134,7 +132,7 @@ class PPOBuffer:
         self.b_h_buf[self.ptr] = b_h
         self.ptr += 1
 
-    def finish_path(self, last_val=0, last_cval=0):
+    def finish_path(self, last_val=0):
         """
         Call this at the end of a trajectory, or when one gets cut off
         by an epoch ending. This looks back in the buffer to where the
@@ -152,22 +150,17 @@ class PPOBuffer:
 
         path_slice = slice(self.path_start_idx, self.ptr)
         rews = np.append(self.rew_buf[path_slice], last_val)
-        crews = np.append(self.crew_buf[path_slice], last_cval)
 
         vals = np.append(self.val_buf[path_slice], last_val)
-        cvals = np.append(self.cval_buf[path_slice], last_cval)
         
         # the next two lines implement GAE-Lambda advantage calculation
         deltas = rews[:-1] + self.gamma * vals[1:] - vals[:-1]
-        cdeltas = crews[:-1] + self.gamma * cvals[1:] - cvals[:-1]
 
         self.adv_buf[path_slice] = core.discount_cumsum(deltas, self.gamma * self.lam)
-        self.cadv_buf[path_slice] = core.discount_cumsum(cdeltas, self.gamma * self.lam)
 
         
         # the next line computes rewards-to-go, to be targets for the value function
         self.ret_buf[path_slice] = core.discount_cumsum(rews, self.gamma)[:-1]
-        self.cret_buf[path_slice] = core.discount_cumsum(crews, self.gamma)[:-1]
         
         self.path_start_idx = self.ptr
 
@@ -181,13 +174,11 @@ class PPOBuffer:
         self.ptr, self.path_start_idx = 0, 0
         # the next two lines implement the advantage normalization trick
         adv_mean, adv_std = mpi_statistics_scalar(self.adv_buf)
-        cadv_mean, cadv_std = mpi_statistics_scalar(self.cadv_buf)
 
         self.adv_buf = (self.adv_buf - adv_mean) / adv_std
-        self.cadv_buf = (self.cadv_buf - cadv_mean) #/ adv_std
 
-        data = dict(obs=self.obs_buf, act=self.act_buf, ret=self.ret_buf, cret=self.cret_buf,
-                    adv=self.adv_buf, cadv=self.cadv_buf, logp_a=self.logp_a_buf, logp_b=self.logp_b_buf, a_h=self.a_h_buf, b_h=self.b_h_buf)
+        data = dict(obs=self.obs_buf, act=self.act_buf, ret=self.ret_buf,
+                    adv=self.adv_buf, logp_a=self.logp_a_buf, logp_b=self.logp_b_buf, a_h=self.a_h_buf, b_h=self.b_h_buf)
         return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in data.items()}
 
 
@@ -345,10 +336,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Set up function for computing PPO policy loss
     def compute_loss_pi(data):
-        obs, a_h, b_h, adv, cadv,  logp_a_old, logp_b_old = data['obs'], data['a_h'], data['b_h'], data['adv'], data['cadv'] ,data['logp_a'], data['logp_b']
-        cur_cost = data['cur_cost']
-        penalty_param = data['cur_penalty']
-        cost_limit =25
+        obs, a_h, b_h, adv, logp_a_old, logp_b_old = data['obs'], data['a_h'], data['b_h'], data['adv'] ,data['logp_a'], data['logp_b']
         # Policy loss
         pi_a, pi_b, logp_a, logp_b = ac.pi(obs, a_h, b_h) # use s-actor for new log prob
         ratio_a = torch.exp(logp_a - logp_a_old)
@@ -358,29 +346,8 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         clip_adv_b = torch.clamp(ratio_b, 1-clip_ratio, 1+clip_ratio) * adv
         loss_rpi_a = (torch.min(ratio_a * adv, clip_adv_a)).mean()
         loss_rpi_b = (torch.min(ratio_b * adv, clip_adv_b)).mean()
-
-
-        # doesnt matter for nnow
-        loss_cpi = ratio_a*cadv + ratio_b*cadv
-        loss_cpi = loss_cpi.mean()
         
-        p = softplus(penalty_param)
-        if lagrangian:
-            penalty_item = p.item()
-        else:
-            penalty_item = 0
-      
-        pi_objective = loss_rpi_a + loss_rpi_b - penalty_item*loss_cpi
-        pi_objective = pi_objective/(1+penalty_item)
-        loss_pi = -pi_objective
-
-
-        cost_deviation = (cur_cost - cost_limit)
-
-
-
-
-
+        loss_pi = -loss_rpi_a - loss_rpi_b
 
         # Useful extra info
         approx_kl = (logp_a_old - logp_a).mean().item()
@@ -389,67 +356,38 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
         pi_info = dict(kl=approx_kl, ent=ent, cf=clipfrac)
 
-        return loss_pi, cost_deviation, pi_info
+        return loss_pi, pi_info
 
     # Set up function for computing value loss
     def compute_loss_v(data):
-        obs, ret, cret = data['obs'], data['ret'], data['cret']
-        return ((ac.v(obs) - ret)**2).mean(),((ac.vc(obs) - cret)**2).mean()
+        obs, ret = data['obs'], data['ret']
+        return ((ac.v(obs) - ret)**2).mean()
 
 
     # Set up optimizers for policy and value function
     pi_lr = 3e-4
     pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
-    penalty_param = torch.tensor(1.0,requires_grad=True).float()
-    penalty = softplus(penalty_param)
     
-
-    penalty_lr = 5e-2
-    penalty_optimizer = Adam([penalty_param], lr=penalty_lr)
     vf_lr = 1e-3
     vf_optimizer = Adam(ac.v.parameters(), lr=vf_lr)
-    cvf_optimizer = Adam(ac.vc.parameters(),lr=vf_lr)
     # Set up model saving
     logger.setup_pytorch_saver(ac)
 
   
 
     def update(env_steps_count):
-        cur_cost = logger.get_stats('EpCost')[0]
         data = buf.get()
-        data['cur_cost'] = cur_cost
-        data['cur_penalty'] = penalty_param
-        pi_l_old, cost_dev, pi_info_old = compute_loss_pi(data)
-        #print(penalty_param)
-        loss_penalty = -penalty_param*cost_dev
-
-        
-        penalty_optimizer.zero_grad()
-        loss_penalty.backward()
-        mpi_avg_grads(penalty_param)
-        penalty_optimizer.step()
-        #print(penalty_param)
-
-        #penalty = softplus(penalty_param)
-
-        data['cur_penalty'] = penalty_param
-
-        
-
-
-
-
-
+        pi_l_old, pi_info_old = compute_loss_pi(data)
         pi_l_old = pi_l_old.item()
-        v_l_old, cv_l_old = compute_loss_v(data)
-        v_l_old, cv_l_old = v_l_old.item(), cv_l_old.item() 
+        v_l_old = compute_loss_v(data)
+        v_l_old = v_l_old.item()
 
 
         # Train policy with multiple steps of gradient descent
         train_pi_iters=80
         for i in range(train_pi_iters):
             pi_optimizer.zero_grad()
-            loss_pi, _,pi_info = compute_loss_pi(data)
+            loss_pi, pi_info = compute_loss_pi(data)
             kl = mpi_avg(pi_info['kl'])
             if kl > 1.2 * target_kl:
                 logger.log('Early stopping at step %d due to reaching max kl.'%i)
@@ -464,19 +402,11 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Value function learning
         train_v_iters=80
         for i in range(train_v_iters):
-            
-            
-
-            loss_v, loss_vc = compute_loss_v(data)
+            loss_v = compute_loss_v(data)
             vf_optimizer.zero_grad()
             loss_v.backward()
             mpi_avg_grads(ac.v)   # average grads across MPI processes
             vf_optimizer.step()
-
-            cvf_optimizer.zero_grad()
-            loss_vc.backward()
-            mpi_avg_grads(ac.vc)
-            cvf_optimizer.step()
 
         # Log changes from update
         kl, ent, cf = pi_info['kl'], pi_info_old['ent'], pi_info['cf']
@@ -499,7 +429,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Prepare for interaction with environment
     start_time = time.time()
-    o  = env.reset()
+    o, _ = env.reset()
     ep_ret,ep_cret, ep_len = 0,0,0
     env_steps_count = 0
     # Main loop: collect experience in env and update/log each epoch
@@ -508,12 +438,10 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     frames=[]
     for epoch in range(epochs):
         for t in range(local_steps_per_epoch):
-            a, a_h, b_h, v, vc, logp_a, logp_b = ac.step(torch.as_tensor(o, dtype=torch.float32))
+            a, a_h, b_h, v, logp_a, logp_b = ac.step(torch.as_tensor(o, dtype=torch.float32))
 
-            next_o, r, d, info = env.step(a)
-            c = info['cost']
+            next_o, r, d, truncated, info = env.step(a)
             ep_ret += r
-            ep_cret += c
             ep_len += 1
             env_steps_count +=1
             #Start Evaluation
@@ -522,9 +450,8 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
 
             # save and log
-            buf.store(o, a, a_h, b_h, r, c, v,vc, logp_a, logp_b)
+            buf.store(o, a, a_h, b_h, r, v, logp_a, logp_b)
             logger.store(VVals=v)
-            logger.store(CVVals=vc)
             
             # Update obs (critical!)
             o = next_o
@@ -538,16 +465,15 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                     print('Warning: trajectory cut off by epoch at %d steps.'%ep_len, flush=True)
                 # if trajectory didn't reach terminal state, bootstrap value target
                 if timeout or epoch_ended:
-                    _, _, _, v,vc, _, _ = ac.step(torch.as_tensor(o, dtype=torch.float32))
+                    _, _, _, v, _, _ = ac.step(torch.as_tensor(o, dtype=torch.float32))
                 else:
                     v = 0
-                    vc = 0
-                buf.finish_path(last_val=v,last_cval=vc)
+                buf.finish_path(last_val=v)
                 if terminal:
                     # only save EpRet / EpLen if trajectory finished
-                    logger.store(EpRet=ep_ret, EpLen=ep_len, EpCost=ep_cret)
-                o = env.reset()
-                ep_ret, ep_cret, ep_len = 0,0,0
+                    logger.store(EpRet=ep_ret, EpLen=ep_len)
+                o, _ = env.reset()
+                ep_ret, ep_len = 0,0
 
 
 
@@ -562,7 +488,6 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Log info about epoch
         logger.log_tabular('Epoch', epoch)
         logger.log_tabular('EpRet', with_min_and_max=True)
-        logger.log_tabular('EpCost',with_min_and_max=True)
         logger.log_tabular('EpLen', average_only=True)
         logger.log_tabular('VVals', with_min_and_max=True)
         logger.log_tabular('TotalEnvInteracts', (epoch+1)*steps_per_epoch)
@@ -578,6 +503,23 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.dump_tabular()
         
 
+def make_env(env_id, idx, capture_video, run_name, gamma):
+    def thunk():
+        if capture_video and idx == 0:
+            env = gymnasium.make(env_id, render_mode="rgb_array")
+            env = gymnasium.wrappers.RecordVideo(env, f"videos/{run_name}")
+        else:
+            env = gymnasium.make(env_id)
+        #env = gymnasium.wrappers.FlattenObservation(env)  # deal with dm_control's Dict observation space
+        env = gymnasium.wrappers.RecordEpisodeStatistics(env)
+        #env = gym.wrappers.ClipAction(env)
+        #env = gymnasium.wrappers.NormalizeObservation(env)
+        #env = gymnasium.wrappers.TransformObservation(env, lambda obs: np.clip(obs, -10, 10))
+        #env = gym.wrappers.NormalizeReward(env, gamma=gamma)
+        #env = gym.wrappers.TransformReward(env, lambda reward: np.clip(reward, -10, 10))
+        return env
+
+    return thunk
 
 if __name__ == '__main__':
     import argparse
@@ -595,7 +537,7 @@ if __name__ == '__main__':
 
     if args.env == 'CartPole':
         steps_per_epoch = 4000
-        env_fn = lambda : Cartpole(0, 0, focus=0)
+        env_fn = make_env("customEnvs/CartPoleEnvParamActions",0,False,"Test",args.gamma)
     elif args.env == 'HalfCheetah':
         steps_per_epoch = 30000
         env_fn = lambda : HalfCheetahEnv()
