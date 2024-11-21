@@ -4,10 +4,10 @@ import random
 import time
 from dataclasses import dataclass
 from gymnasium.envs.registration import register
-from envs.cartpole_pret_gymnasium import CartPoleEnv
+from envs.cartpole_pret import CartPoleEnvParamActions
 register(
-    id="customEnvs/CartPoleEnv",
-    entry_point="envs.cartpole_pret_gymnasium:CartPoleEnv",
+    id="customEnvs/CartPoleEnvParamActions",
+    entry_point="envs.cartpole_pret:CartPoleEnvParamActions",
 )
 import gymnasium as gym
 import numpy as np
@@ -40,7 +40,7 @@ class Args:
     """whether to capture videos of the agent performances (check out `videos` folder)"""
 
     # Algorithm specific arguments
-    env_id: str = "customEnvs/CartPoleEnv"
+    env_id: str = "customEnvs/CartPoleEnvParamActions"
     """the environment id of the task"""
     total_timesteps: int = 30000
     """total timesteps of the experiments"""
@@ -71,11 +71,11 @@ class Args:
 def make_env(env_id, seed, idx, capture_video, run_name):
     def thunk():
         if capture_video and idx == 0:
-            env = gym.make(env_id, render_mode="rgb_array")
-            env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
+            env = gym.make(env_id, render_mode="rgb_array", focus = 2, rewardtype = 1)
+            env = gym.wrappers.RecordVideo(env, f"videos/{run_name}", step_trigger=lambda x : x%1000==0)
             print(env.metadata.get("render_fps", None))
         else:
-            env = gym.make(env_id)
+            env = gym.make(env_id,focus = 2, rewardtype = 1)
         from gymnasium.wrappers.time_limit import TimeLimit
         env = TimeLimit(env, 500)
         env = gym.wrappers.RecordEpisodeStatistics(env)
@@ -169,6 +169,20 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             monitor_gym=True,
             save_code=True,
         )
+    wandb.define_metric("agent_eval/env_step")
+    wandb.define_metric("agent_eval/episode_reward", step_metric="agent_eval/env_step")
+    wandb.define_metric("agent_eval/count_failure", step_metric="agent_eval/env_step")
+
+
+    wandb.define_metric("agent_train/env_step")
+    wandb.define_metric("agent_train/lossPi",step_metric="agent_train/env_step")
+    wandb.define_metric("agent_train/LossV",step_metric="agent_train/env_step")
+    wandb.define_metric("agent_train/KL",step_metric="agent_train/env_step")
+    wandb.define_metric("agent_train/Entropy",step_metric="agent_train/env_step")
+    wandb.define_metric("agent_train/ClipFrac",step_metric="agent_train/env_step")
+    wandb.define_metric("agent_train/DeltaLossPi",step_metric="agent_train/env_step")
+    wandb.define_metric("agent_train/DeltaLossV", step_metric="agent_train/env_step")
+
     writer = SummaryWriter(f"runs/{run_name}")
     writer.add_text(
         "hyperparameters",
@@ -188,7 +202,11 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     print(envs)
     assert isinstance(envs.single_action_space, gym.spaces.Box), "only continuous action space is supported"
 
+
+
     max_action = float(envs.single_action_space.high[0])
+
+    count_failure = 0
 
     actor = Actor(envs).to(device)
     qf1 = SoftQNetwork(envs).to(device)
@@ -231,13 +249,18 @@ poetry run pip install "stable_baselines3==2.0.0a1"
 
         # TRY NOT TO MODIFY: execute the game and log data.
         next_obs, rewards, terminations, truncations, infos = envs.step(actions)
-
+        if terminations == True:
+            count_failure+=1
         # TRY NOT TO MODIFY: record rewards for plotting purposes
         if "final_info" in infos:
             for info in infos["final_info"]:
                 print(f"global_step={global_step}, episodic_return={info['episode']['r']}")
                 writer.add_scalar("charts/episodic_return", info["episode"]["r"], global_step)
                 writer.add_scalar("charts/episodic_length", info["episode"]["l"], global_step)
+                data = {"agent_eval/env_step": global_step,
+                    "agent_eval/count_failure":count_failure,
+                        "agent_eval/episode_reward": info['episode']['r']}
+                wandb.log(data)
                 break
 
         # TRY NOT TO MODIFY: save data to reply buffer; handle `final_observation`

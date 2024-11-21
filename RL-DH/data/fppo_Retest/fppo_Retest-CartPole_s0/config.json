@@ -14,7 +14,7 @@
     "lagrangian":	false,
     "lam":	0.97,
     "logger":	{
-        "<utils.logx.EpochLogger object at 0x7a98305a6cd0>":	{
+        "<utils.logx.EpochLogger object at 0x72a1e7686fd0>":	{
             "epoch_dict":	{},
             "exp_name":	"fppo_Retest",
             "first_row":	true,

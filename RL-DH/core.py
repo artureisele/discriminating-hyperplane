@@ -342,7 +342,7 @@ class SafeMLPActorCritic(nn.Module):
                     a = a - (((a_h @ a) - b_h) / torch.norm(a, dim=-1)) * a_h
             logp_a, logp_b = self.pi._log_prob_from_distribution(pi_a, a_h, pi_b, b_h)
             v = self.v(obs)
-            a = torch.clip(a, torch.tensor(-1), torch.tensor(1))
+            #a = torch.clip(a, torch.tensor(-1), torch.tensor(1))
         return a.numpy(), a_h.numpy(), b_h.numpy(), v.numpy(), logp_a.numpy(), logp_b.numpy()
     def stepEval(self, obs):
         with torch.no_grad():
@@ -355,7 +355,43 @@ class SafeMLPActorCritic(nn.Module):
                 a = a - (((a_h @ a) - b_h) / torch.norm(a, dim=-1)) * a_h
             logp_a, logp_b = self.pi._log_prob_from_distribution(pi_a, a_h, pi_b, b_h)
             v = self.v(obs)
-            a = torch.clip(a, torch.tensor(-1), torch.tensor(1))
+            #a = torch.clip(a, torch.tensor(-1), torch.tensor(1))
         return a.numpy(), a_h.numpy(), b_h.numpy(), v.numpy(), logp_a.numpy(), logp_b.numpy()
     def act(self, obs):
         return self.step(obs)[0]
+    
+    def filter_actions_from_numpyarray(self, a_h, b_h, performance_action):
+        """
+        a_h, b_h numpy_array, a numpy array
+        """
+        a = torch.from_numpy(performance_action)
+        a_h = torch.from_numpy(a_h)
+        b_h = torch.from_numpy(b_h)
+
+        filtered = False
+        projected = False
+        if a_h @ a < b_h:
+            a = a - (((a_h @ a) - b_h) / torch.norm(a, dim=-1)) * a_h
+            filtered = True
+        if a>1 or a <-1:
+            a = torch.clip(a, torch.tensor(-1), torch.tensor(1))
+            projected = True
+        return a, filtered, projected
+    
+    def filter_actions(self, a_h, b_h, performance_action):
+        """
+        a_h, b_h numpy_array, a scalar
+        """
+        a = torch.tensor([performance_action])
+        a_h = torch.from_numpy(a_h)
+        b_h = torch.from_numpy(b_h)
+
+        filtered = False
+        projected = False
+        if a_h @ a < b_h:
+            a = a - (((a_h @ a) - b_h) / torch.norm(a, dim=-1)) * a_h
+            filtered = True
+        if a>1 or a <-1:
+            a = torch.clip(a, torch.tensor(-1), torch.tensor(1))
+            projected = True
+        return a, filtered, projected

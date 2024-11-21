@@ -63,7 +63,7 @@ class CartPoleEnvParamActions(gym.Env[np.ndarray, Union[int, np.ndarray]]):
         "render_modes": ["human", "rgb_array"],
         "render_fps": 50,
     }
-    def __init__(self, render_mode: Optional[str] = None, focus:float=0.0):
+    def __init__(self, render_mode: Optional[str] = None, focus:float=0.0, rewardtype:int = 0):
         self.gravity = 9.8
         self.masscart = 1.0
         self.masspole = 0.1
@@ -77,6 +77,10 @@ class CartPoleEnvParamActions(gym.Env[np.ndarray, Union[int, np.ndarray]]):
 
         # try to stay ariound position focus
         self.focus = focus
+
+        # 0 = Reward for learning the barriers
+        # 1 = Reward for coming close to focus point
+        self.rewardtype= rewardtype
 
         # Angle at which to fail the episode
         self.theta_threshold_radians = 24 * 2 * math.pi / 360
@@ -128,6 +132,9 @@ class CartPoleEnvParamActions(gym.Env[np.ndarray, Union[int, np.ndarray]]):
         return (x, x_dot, theta, theta_dot)
 
     def step(self, action):
+        bonus = 1 if -1<action and action<1 else 0
+        action = np.clip(action, [-1], [1])
+        action = action.astype(np.float32)
         assert self.action_space.contains(action), f"{action!r} ({type(action)}) invalid"
         assert self.state is not None, "Call reset before using step method."
         force = self.force_mag * float(action)
@@ -140,8 +147,14 @@ class CartPoleEnvParamActions(gym.Env[np.ndarray, Union[int, np.ndarray]]):
             or theta < -self.theta_threshold_radians
             or theta > self.theta_threshold_radians
         )
+
         if not terminated:
-            reward = 1.0 
+            if self.rewardtype == 0:
+                reward = 1.0 + bonus
+            elif self.rewardtype == 1:
+                penalty = (math.sqrt((x-self.focus)**2)/(2*self.x_threshold))
+                assert penalty<=1 and penalty>=0
+                reward = 1 - penalty
         elif self.steps_beyond_terminated is None:
             # Pole just fell!
             self.steps_beyond_terminated = 0
