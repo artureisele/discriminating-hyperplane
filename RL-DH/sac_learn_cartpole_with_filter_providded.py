@@ -64,7 +64,7 @@ class Args:
     """the frequency of updates for the target nerworks"""
     alpha: float = 0.2
     """Entropy regularization coefficient."""
-    autotune: bool = True
+    autotune: bool = False
     """automatic tuning of the entropy coefficient"""
 
 
@@ -244,13 +244,13 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     for global_step in range(args.total_timesteps):
         # ALGO LOGIC: put action logic here
         if global_step < args.learning_starts:
-            actions = np.array([envs.single_action_space.sample() for _ in range(envs.num_envs)])
+            actions_per = np.array([envs.single_action_space.sample() for _ in range(envs.num_envs)])
         else:
-            actions, _, _ = actor.get_action(torch.Tensor(obs).to(device))
-            actions = actions.detach().cpu().numpy()
+            actions_per, _, _ = actor.get_action(torch.Tensor(obs).to(device))
+            actions_per = actions_per.detach().cpu().numpy()
         #FILTER ACTION HERE SAFETY
         _, a_h, b_h, v, logp_a, logp_b = filter_actor.step(torch.as_tensor(obs[0], dtype=torch.float32))
-        action,_,_ = filter_actor.filter_actions_from_numpyarray(a_h,b_h,actions[0])
+        action,_,_ = filter_actor.filter_actions_from_numpyarray(a_h,b_h,actions_per[0])
         actions = action.unsqueeze(0).detach().cpu().numpy()
         # TRY NOT TO MODIFY: execute the game and log data.
         next_obs, rewards, terminations, truncations, infos = envs.step(actions)
@@ -273,7 +273,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
         for idx, trunc in enumerate(truncations):
             if trunc:
                 real_next_obs[idx] = infos["final_observation"][idx]
-        rb.add(obs, real_next_obs, actions, rewards, terminations, infos)
+        rb.add(obs, real_next_obs, actions_per, rewards, terminations, infos)
 
         # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
         obs = next_obs
