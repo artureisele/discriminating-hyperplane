@@ -23,9 +23,9 @@ from pathlib import Path
 from utils.run_utils import setup_logger_kwargs
 @dataclass
 class Args:
-    exp_name: str = "DoubleLearningSACCartpole"#os.path.basename(__file__)[: -len(".py")]
+    exp_name: str = "DoubleLearningSACCartpoleFullEvalTrainUntilSafe"#os.path.basename(__file__)[: -len(".py")]
     """the name of this experiment"""
-    seed: int = 44
+    seed: int = 49
     """seed of the experiment"""
     torch_deterministic: bool = True
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
@@ -37,7 +37,7 @@ class Args:
     """the wandb's project name"""
     wandb_entity: str = None
     """the entity (team) of wandb's project"""
-    capture_video: bool = False
+    capture_video: bool = True
     """whether to capture videos of the agent performances (check out `videos` folder)"""
 
     # Algorithm specific arguments
@@ -80,9 +80,9 @@ class Args:
     "Initial training steps for saftey barriers"
     s_steps_per_epoch: int = 4000
     "Steps in environment per training epoch. If terminated during this steps new episode is started till 4000 is reached"
-    s_epoch_retrain: int = 1#20
+    s_epoch_retrain_threshold: int = 5
     "Number of epochs to retrain safety barriers after every performance actor update"
-    safety_filter_default_path = "model_safety_default.pt"
+    safety_filter_default_path = "model_safety_default_until_safe5.pt"
 
 def make_env_safety(env_id, seed, idx, capture_video, run_name):
     def thunk():
@@ -102,7 +102,7 @@ def makemake_env_perf(env_id, seed, idx, capture_video, run_name):
         capture_video = True
         if capture_video and idx == 0:
             env = gymnasium.make(env_id, render_mode="rgb_array", focus = 1.6, rewardtype = 1)
-            env = gymnasium.wrappers.RecordVideo(env, f"videos/{run_name}", episode_trigger=lambda x : False)
+            env = gymnasium.wrappers.RecordVideo(env, f"videos/{run_name}", episode_trigger=lambda x : capture_video)
             print(env.metadata.get("render_fps", None))
         else:
             env = gymnasium.make(env_id,focus = 1.6, rewardtype = 1)
@@ -151,8 +151,11 @@ if __name__ == "__main__":
         )
     wandb.define_metric("agent_eval_safety/env_step")
     wandb.define_metric("agent_eval_safety/episode_reward", step_metric="agent_eval_safety/env_step")
+    wandb.define_metric("agent_eval_safety/number_filtered", step_metric="agent_eval_safety/env_step")
+    wandb.define_metric("agent_eval_safety/number_clipped", step_metric="agent_eval_safety/env_step")
+    wandb.define_metric("agent_eval_safety/CartpoleTrajectory", step_metric="agent_eval_safety/env_step")
     wandb.define_metric("agent_eval_safety/CartpoleBorderDecisions", step_metric="agent_eval_safety/env_step")
-
+    wandb.define_metric("agent_eval_safety/CartpoleValueFunction", step_metric="agent_eval_safety/env_step")
 
     wandb.define_metric("agent_train_safety/env_step")
     wandb.define_metric("agent_train_safety/lossPi",step_metric="agent_train_safety/env_step")

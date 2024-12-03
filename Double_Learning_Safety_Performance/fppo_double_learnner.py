@@ -85,7 +85,143 @@ def evaluate(eval_env, env_steps_count,ac, performance_actor_new):
                     "agent_eval_safety/CartpoleBorderDecisions": wandb.Image(plt)},
             step=env_steps_count)
     plt.close()  # Close plot to avoid replotting issues
+def evaluate2(eval_env, env_steps_count, ac, performance_actor_new):
+    evalReturn = 0
+    evalSteps = 500
+    max_reward = 2
+    evalIters=1
+    borders = []
+    colors=[]
+    filtered = 0
+    clipped = 0
+    for i in range(evalIters):
+        d = False
+        steps = 0
+        o, _ = eval_env.reset()
+        while(not (d or (steps%evalSteps==0 and steps != 0)) ):
+            a, a_h, b_h, v = ac.stepEval(torch.as_tensor(o, dtype=torch.float32))
+            if performance_actor_new is not None:
+                actions_per, _, _ = performance_actor_new.actor.get_action(torch.Tensor(o).to("cuda:0").unsqueeze(0))
+                actions_per = actions_per.detach().cpu().numpy()
+                a,f,c = ac.filter_actions_from_numpyarray(a_h,b_h,actions_per[0])
+                if f:
+                    filtered = filtered +1
+                if c:
+                    clipped = clipped+1
+            next_o, r, d,truncated, info = eval_env.step(a)
+            evalReturn+=r
+            steps +=1
+            #eval_env.render()
+            if(a_h>0):
+                to_right_is_dangerous = True
+            else:
+                to_right_is_dangerous = False
+            threshold = (b_h/a_h)[0]
+            borders.append([o[0],o[2],to_right_is_dangerous, threshold])
+            colors.append(steps/500)
+            o = next_o
+    fig = plt.figure(figsize=(8, 8))
+    ax = fig.add_subplot(111)
+    arrowDirX=[]
+    arrowDirY=[]
+    for _,_,to_right_is_dangerous, threshold in borders:
+        intensity = min(abs(threshold),1)
+        if to_right_is_dangerous:
+            if threshold<0:
+                #Strong decision drive left(negative) <------
+                arrowDirX.append(-1+ intensity * -20)
+                arrowDirY.append(0)
+            else:
+                arrowDirX.append(0)
+                arrowDirY.append(0.1)
+        else:
+            if threshold<0:
+                arrowDirX.append(0)
+                arrowDirY.append(-0.1)
+            else:
+                #Strong decision drive right(positive) <------
+                arrowDirX.append(1+intensity*20)
+                arrowDirY.append(0)
+    borders = np.array(borders)
+    safe_x = 2.4
+    safe_radians = 24 * 2 * math.pi / 360
+    rectangle = patches.Rectangle((-safe_x, -safe_radians), 2*safe_x, 2*safe_radians, linewidth=2, edgecolor='green', facecolor='white')
+    ax.add_patch(rectangle)
+    quiver_plot=plt.quiver(borders[:,0], borders[:,1], arrowDirX, arrowDirY,colors, cmap="viridis", angles='xy', scale_units='xy', scale=25)
+    # This are the borders of the simulation
+    plt.axis([-2*safe_x, 2*safe_x, -2*safe_radians, 2*safe_radians])
+    plt.colorbar(quiver_plot, label="Timesteps")            
+    plt.xlabel("X")
+    plt.ylabel("Theta")
+    plt.title("Cartpole Trajectory")
+    plot1 = wandb.Image(plt)
+    plt.close()
 
+    safe_radians = 24 * 2 * math.pi / 360
+    borders = []
+    arrowDirX=[]
+    arrowDirY=[]
+    safe_x=2.4
+    fig = plt.figure(figsize=(8, 8))
+    ax = fig.add_subplot(111)
+    colors = []
+    colors_v = []
+    for x in np.arange(-2.4-2.4,2.5+2.4,0.2):
+        for theta in np.arange(-safe_radians*2,safe_radians*2,math.pi / 360 *8):
+            o=[x,0,theta,0]
+            a, a_h, b_h, v= ac.stepEval(torch.as_tensor(o, dtype=torch.float32))
+            colors_v.append(v)
+            borders.append([x,theta])
+            threshold = np.clip((b_h/a_h)[0],-1,1)
+            if(a_h>0):
+                to_right_is_dangerous = False
+            else:
+                to_right_is_dangerous = True
+            if to_right_is_dangerous:
+                arrowDirX.append(0)
+                arrowDirY.append(-1)
+                colors.append(threshold)
+            else:
+                arrowDirX.append(0)
+                arrowDirY.append(1)
+                colors.append(threshold)
+    borders = np.array(borders)
+    rectangle = patches.Rectangle((-safe_x, -safe_radians), 2*safe_x, 2*safe_radians, linewidth=2, edgecolor='green', facecolor='white')
+    ax.add_patch(rectangle)
+    quiver_plot=plt.quiver(borders[:,0], borders[:,1], arrowDirX, arrowDirY,colors, cmap ="viridis", angles='xy', scale_units='xy', scale=25)
+    # This are the borders of the simulation
+    plt.axis([-2*safe_x, 2*safe_x, -2*safe_radians, 2*safe_radians])
+    plt.colorbar(quiver_plot, label="Safe actions from value in direction of arrow")            
+    plt.xlabel("X")
+    plt.ylabel("Theta")
+    plt.title("Cartpole Border Decisions")
+    plot2 = wandb.Image(plt)
+    plt.close()
+    fig = plt.figure(figsize=(8, 8))
+    ax = fig.add_subplot(111)
+    rectangle = patches.Rectangle((-safe_x, -safe_radians), 2*safe_x, 2*safe_radians, linewidth=2, edgecolor='green', facecolor='white')
+    ax.add_patch(rectangle)
+    value_plot=plt.scatter(borders[:,0], borders[:,1], c= colors_v, cmap ="viridis", s=30)
+    # This are the borders of the simulation
+    plt.axis([-2*safe_x, 2*safe_x, -2*safe_radians, 2*safe_radians])
+    plt.colorbar(value_plot, label="Value function values")            
+    plt.xlabel("X")
+    plt.ylabel("Theta")
+    plt.title("Value function")
+    plot3 = wandb.Image(plt)
+    plt.close()
+    evalReturn/=evalIters
+    # Log the plot to WandB
+    wandb.log(data={"agent_eval_safety/env_step": env_steps_count,
+                    "agent_eval_safety/episode_reward": evalReturn,
+                    "agent_eval_safety/number_filtered": filtered,
+                    "agent_eval_safety/number_clipped": clipped,
+                    "agent_eval_safety/CartpoleTrajectory": plot1,
+                    "agent_eval_safety/CartpoleBorderDecisions": plot2,
+                    "agent_eval_safety/CartpoleValueFunction": plot3},
+            step=env_steps_count)
+    plt.close()  # Close plot to avoid replotting issues
+    return evalReturn == evalSteps*max_reward
 
 class PPOBuffer:
     """
@@ -183,7 +319,7 @@ class PPOBuffer:
 
 
 def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
-        steps_per_epoch=4000, epochs=50, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
+        steps_per_epoch=4000, epochs_retrain_threshold=50, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
         vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97, max_ep_len=1000,
         target_kl=0.01, logger_kwargs=dict(), save_freq=1, lagrangian=False, performance_actor_new = None, safe_actor = None, safety_global_step = 0):
     """
@@ -425,7 +561,13 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     batch_size= 500
     borders = np.zeros((batch_size,4))
     frames=[]
-    for epoch in range(epochs):
+    epoch = -1
+    safety_assured_counter = 0
+    while True:
+        if safety_assured_counter>=epochs_retrain_threshold:
+            wandb.log({"epoch_until_safe": epoch})
+            break
+        epoch +=1
         for t in range(local_steps_per_epoch):
             a, a_h, b_h, v, logp_a, logp_b = ac.step(torch.as_tensor(o, dtype=torch.float32))
             if performance_actor_new is not None:
@@ -463,9 +605,13 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 o, _ = env.reset()
                 ep_ret, ep_len = 0,0
 
-        evaluate(eval_env, env_steps_count, ac, performance_actor_new)
+        safety_assured = evaluate2(eval_env, env_steps_count, ac, performance_actor_new)
+        if safety_assured:
+            safety_assured_counter +=1
+        else:
+            safety_assured_counter = 0
         # Save model
-        if (epoch % save_freq == 0) or (epoch == epochs-1):
+        if (epoch % save_freq == 0) or (safety_assured_counter == epochs_retrain_threshold):
             vals = logger.epoch_dict['EpRet']
             stats = mpi_statistics_scalar(vals, with_min_and_max=True)
             logger.save_state({'env': env}, None)
@@ -495,12 +641,12 @@ def maybe_update_safe_actor(safe_actor_old, performance_actor_new, env_fn, args,
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = args.torch_deterministic
-    if safe_actor_old is None:
-        num_steps = int(args.s_initial_steps)
-        epochs = int(num_steps / args.s_steps_per_epoch)
-    else:
-        epochs = args.s_epoch_retrain
+    #if safe_actor_old is None:
+    #    num_steps = int(args.s_initial_steps)
+    #    epochs = int(num_steps / args.s_steps_per_epoch)
+    #else:
+    #    epochs = args.s_epoch_retrain
     return ppo(env_fn=env_fn, actor_critic=core.SafeMLPActorCritic,
         ac_kwargs=dict(hidden_sizes=[args.s_hid]*args.s_l), gamma=args.s_gamma, 
-        seed=args.seed, steps_per_epoch=args.s_steps_per_epoch, epochs=epochs,
+        seed=args.seed, steps_per_epoch=args.s_steps_per_epoch, epochs_retrain_threshold=args.s_epoch_retrain_threshold,
         logger_kwargs=logger_kwargs, lagrangian=False, performance_actor_new = performance_actor_new, safe_actor=safe_actor_old, safety_global_step=safety_global_step)

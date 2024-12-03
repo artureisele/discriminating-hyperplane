@@ -223,12 +223,12 @@ def maybe_update_performance_actor(safe_actor_new, performance_actor_old, env_fn
                 data = {
                     "agent_train_performance/env_step": global_step_training,
                     "agent_train_performance/qf1_values": qf1_a_values.mean().item(),
-                    "agent_train_performance/qf2_values": qf1_a_values.mean().item(),
-                    "agent_train_performance/qf1_loss": qf1_a_values.mean().item(),
-                    "agent_train_performance/qf2_loss": qf1_a_values.mean().item(),
-                    "agent_train_performance/qf_loss": qf1_a_values.mean().item(),
-                    "agent_train_performance/actor_loss": qf1_a_values.mean().item(),
-                    "agent_train_performance/alpha": qf1_a_values.mean().item(),
+                    "agent_train_performance/qf2_values": qf2_a_values.mean().item(),
+                    "agent_train_performance/qf1_loss": qf1_loss.item(),
+                    "agent_train_performance/qf2_loss": qf2_loss.item(),
+                    "agent_train_performance/qf_loss": qf_loss.item(),
+                    "agent_train_performance/actor_loss": actor_loss.item(),
+                    "agent_train_performance/alpha": ac_sac.alpha,
                     "agent_train_performance/alpha_loss": alpha_loss.item() if args.autotune else 0
                 }
                 wandb.log(data)

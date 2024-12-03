@@ -375,15 +375,15 @@ class SafeMLPActorCritic(nn.Module):
         b_h = torch.from_numpy(b_h)
 
         filtered = False
-        projected = False
+        clipped = False
         if a_h @ a < b_h:
             a = a - ((((a_h @ a) - b_h) / (torch.norm(a_h, dim=-1)**2) ) * a_h)
             filtered = True
         if torch.any(a>1) or torch.any(a <-1):
             a = torch.clip(a, -1*torch.ones_like(a), torch.ones_like(a))
-            projected = True
+            clipped = True
         a = a.detach().cpu().numpy()
-        return a, filtered, projected
+        return a, filtered, clipped
     
     def filter_actions(self, a_h, b_h, performance_action):
         """
