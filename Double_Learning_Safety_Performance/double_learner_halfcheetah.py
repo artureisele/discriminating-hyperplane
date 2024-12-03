@@ -16,14 +16,15 @@ import torch.nn.functional as F
 import torch.optim as optim
 import tyro
 from stable_baselines3.common.buffers import ReplayBuffer
-from fppo_double_learnner import maybe_update_safe_actor
-from sac_double_learner import maybe_update_performance_actor
+from fppo_double_learnner_halfcheetah import maybe_update_safe_actor
+from sac_double_learner_halfcheetah import maybe_update_performance_actor
 import warnings
 from pathlib import Path
 from utils.run_utils import setup_logger_kwargs
+from envs.halfcheetah_cost_wrapper import RewardWrapperHalfcheetahHyperPlane
 @dataclass
 class Args:
-    exp_name: str = "DoubleLearningSACCartpole"#os.path.basename(__file__)[: -len(".py")]
+    exp_name: str = "DoubleLearningSACHalfcheetahTrainFromFilter"#os.path.basename(__file__)[: -len(".py")]
     """the name of this experiment"""
     seed: int = 44
     """seed of the experiment"""
@@ -41,9 +42,9 @@ class Args:
     """whether to capture videos of the agent performances (check out `videos` folder)"""
 
     # Algorithm specific arguments
-    env_id: str = "customEnvs/CartPole"
+    env_id: str = "HalfCheetah-v5"
     """the environment id of the task"""
-    p_retrain_steps: int = 6000
+    p_retrain_steps: int = 12000
     """total timesteps of the experiments"""
     buffer_size: int = 1000000
     """the replay memory buffer size"""
@@ -76,15 +77,16 @@ class Args:
     """hidden layer number"""
     s_gamma: float = 0.99
     "gamma value for safe actor"
-    s_initial_steps: float = 500000
+    s_initial_steps: float = 5010000
     "Initial training steps for saftey barriers"
-    s_steps_per_epoch: int = 4000
+    s_steps_per_epoch: int = 30000
     "Steps in environment per training epoch. If terminated during this steps new episode is started till 4000 is reached"
-    s_epoch_retrain: int = 1#20
+    s_epoch_retrain: int = 10
     "Number of epochs to retrain safety barriers after every performance actor update"
-    safety_filter_default_path = "model_safety_default.pt"
+    safety_filter_default_path = "model_safety_default_halfcheetah.pt"
 
-def make_env_safety(env_id, seed, idx, capture_video, run_name):
+
+def make_env_safety_halfcheetah(env_id, seed, idx, capture_video, run_name):
     def thunk():
         if capture_video and idx == 0:
             env = gymnasium.make(env_id, render_mode="rgb_array")
@@ -92,6 +94,7 @@ def make_env_safety(env_id, seed, idx, capture_video, run_name):
         else:
             env = gymnasium.make(env_id)
         env = gymnasium.wrappers.RecordEpisodeStatistics(env)
+        env = RewardWrapperHalfcheetahHyperPlane(env, safety_reward = True)
         env.action_space.seed(seed)
         return env
 
@@ -101,14 +104,13 @@ def makemake_env_perf(env_id, seed, idx, capture_video, run_name):
     def thunk():
         capture_video = True
         if capture_video and idx == 0:
-            env = gymnasium.make(env_id, render_mode="rgb_array", focus = 1.6, rewardtype = 1)
-            env = gymnasium.wrappers.RecordVideo(env, f"videos/{run_name}", episode_trigger=lambda x : False)
+            env = gymnasium.make(env_id, render_mode="rgb_array")
+            env = gymnasium.wrappers.RecordVideo(env, f"videos/{run_name}", episode_trigger=lambda x : True)
             print(env.metadata.get("render_fps", None))
         else:
-            env = gymnasium.make(env_id,focus = 1.6, rewardtype = 1)
-        from gymnasium.wrappers import TimeLimit
-        env = TimeLimit(env, 500)
+            env = gymnasium.make(env_id)
         env = gymnasium.wrappers.RecordEpisodeStatistics(env)
+        env = RewardWrapperHalfcheetahHyperPlane(env, safety_reward = False)
         env.action_space.seed(seed)
         return env
 
@@ -180,7 +182,7 @@ if __name__ == "__main__":
     wandb.define_metric("agent_train_performance/alpha_loss", step_metric="agent_train_performance/env_step")
 
     #Initial Training of safety discriminating hyperplanes
-    s_env_fn = make_env_safety(args.env_id,args.seed,0,args.capture_video,run_name)
+    s_env_fn = make_env_safety_halfcheetah(args.env_id,args.seed,0,args.capture_video,run_name)
     p_env_fn = makemake_env_perf(args.env_id,args.seed,0,args.capture_video,run_name)
     logger_kwargs = setup_logger_kwargs(args.exp_name, args.env_id, args.seed)
     output_dir = logger_kwargs["output_dir"]
