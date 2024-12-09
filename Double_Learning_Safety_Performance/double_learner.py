@@ -25,7 +25,7 @@ from utils.run_utils import setup_logger_kwargs
 class Args:
     exp_name: str = "DoubleLearningSACCartpoleFullEvalTrainUntilSafe"#os.path.basename(__file__)[: -len(".py")]
     """the name of this experiment"""
-    seed: int = 49
+    seed: int = 78
     """seed of the experiment"""
     torch_deterministic: bool = True
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
@@ -81,6 +81,10 @@ class Args:
     s_steps_per_epoch: int = 4000
     "Steps in environment per training epoch. If terminated during this steps new episode is started till 4000 is reached"
     s_epoch_retrain_threshold: int = 5
+    "Penalize safe action deviation?"
+    penalize_reward: bool = True
+    "Factor multiplied with safe action deviation"
+    penalize_reward_factor: float = 0
     "Number of epochs to retrain safety barriers after every performance actor update"
     safety_filter_default_path = "model_safety_default_until_safe5.pt"
 
@@ -151,6 +155,7 @@ if __name__ == "__main__":
         )
     wandb.define_metric("agent_eval_safety/env_step")
     wandb.define_metric("agent_eval_safety/episode_reward", step_metric="agent_eval_safety/env_step")
+    wandb.define_metric("agent_eval_safety/episode_reward_with_bonus", step_metric="agent_eval_safety/env_step")
     wandb.define_metric("agent_eval_safety/number_filtered", step_metric="agent_eval_safety/env_step")
     wandb.define_metric("agent_eval_safety/number_clipped", step_metric="agent_eval_safety/env_step")
     wandb.define_metric("agent_eval_safety/CartpoleTrajectory", step_metric="agent_eval_safety/env_step")
@@ -170,8 +175,10 @@ if __name__ == "__main__":
     wandb.define_metric("agent_eval_performance/env_step")
     wandb.define_metric("agent_eval_performance/episode_reward", step_metric="agent_eval_performance/env_step")
     wandb.define_metric("agent_eval_performance/count_failure", step_metric="agent_eval_performance/env_step")
+    wandb.define_metric("agent_eval_performance/episode_reward_with_penalty", step_metric="agent_eval_performance/env_step")
+    
 
-
+    wandb.define_metric("agent_train_performance/safeValueFunction")
     wandb.define_metric("agent_train_performance/env_step")
     wandb.define_metric("agent_train_performance/qf1_values",step_metric="agent_train_performance/env_step")
     wandb.define_metric("agent_train_performance/qf2_values",step_metric="agent_train_performance/env_step")

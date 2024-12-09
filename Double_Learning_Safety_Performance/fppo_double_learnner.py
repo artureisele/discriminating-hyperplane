@@ -87,9 +87,10 @@ def evaluate(eval_env, env_steps_count,ac, performance_actor_new):
     plt.close()  # Close plot to avoid replotting issues
 def evaluate2(eval_env, env_steps_count, ac, performance_actor_new):
     evalReturn = 0
+    evalReturnWithBonus = 0
     evalSteps = 500
-    max_reward = 2
-    evalIters=1
+    max_reward = 1
+    evalIters=5
     borders = []
     colors=[]
     filtered = 0
@@ -109,7 +110,8 @@ def evaluate2(eval_env, env_steps_count, ac, performance_actor_new):
                 if c:
                     clipped = clipped+1
             next_o, r, d,truncated, info = eval_env.step(a)
-            evalReturn+=r
+            evalReturnWithBonus+=r
+            evalReturn+=r- info["bonus"]
             steps +=1
             #eval_env.render()
             if(a_h>0):
@@ -211,16 +213,17 @@ def evaluate2(eval_env, env_steps_count, ac, performance_actor_new):
     plot3 = wandb.Image(plt)
     plt.close()
     evalReturn/=evalIters
+    evalReturnWithBonus/=evalIters
     # Log the plot to WandB
     wandb.log(data={"agent_eval_safety/env_step": env_steps_count,
                     "agent_eval_safety/episode_reward": evalReturn,
+                    "agent_eval_safety/episode_reward_with_bonus": evalReturnWithBonus,
                     "agent_eval_safety/number_filtered": filtered,
                     "agent_eval_safety/number_clipped": clipped,
                     "agent_eval_safety/CartpoleTrajectory": plot1,
                     "agent_eval_safety/CartpoleBorderDecisions": plot2,
                     "agent_eval_safety/CartpoleValueFunction": plot3},
             step=env_steps_count)
-    plt.close()  # Close plot to avoid replotting issues
     return evalReturn == evalSteps*max_reward
 
 class PPOBuffer:

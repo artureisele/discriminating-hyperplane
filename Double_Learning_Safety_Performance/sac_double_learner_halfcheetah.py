@@ -122,6 +122,7 @@ def maybe_update_performance_actor(safe_actor_new, performance_actor_old, env_fn
     start_time = time.time()
 
     # TRY NOT TO MODIFY: start the game
+    return_with_penalty = 0
     obs, _ = envs.reset(seed=args.seed)
     last_start_of_episode = 0
     if performance_actor_old is None:
@@ -141,6 +142,10 @@ def maybe_update_performance_actor(safe_actor_new, performance_actor_old, env_fn
         action,_,_ = safe_actor_new.filter_actions_from_numpyarray(a_h,b_h,actions_per)
         # TRY NOT TO MODIFY: execute the game and log data.
         next_obs, rewards, terminations, truncations, infos = envs.step(action)
+        #Penalize reward by deviation from safe action
+        if args.penalize_reward:
+            rewards = rewards - args.penalize_reward_factor * np.power(np.sum(np.power(actions_per-action,2)),2)
+            return_with_penalty += rewards
         if terminations == True:
             count_failure+=1
         # TRY NOT TO MODIFY: record rewards for plotting purposes
@@ -149,7 +154,8 @@ def maybe_update_performance_actor(safe_actor_new, performance_actor_old, env_fn
                 print(f"global_step={global_step}, episodic_return={infos['episode']['r']}")
                 data = {"agent_eval_performance/env_step": global_step,
                     "agent_eval_performance/count_failure":count_failure,
-                        "agent_eval_performance/episode_reward": infos['episode']['r']}
+                        "agent_eval_performance/episode_reward": infos['episode']['r'],
+                        "agent_eval_performance/episode_reward_with_penalty": return_with_penalty}
                 wandb.log(data)
 
         # TRY NOT TO MODIFY: save data to reply buffer; handle `final_observation`
@@ -163,9 +169,11 @@ def maybe_update_performance_actor(safe_actor_new, performance_actor_old, env_fn
             torch.save(ac_sac, f"{output_dir}/terminated/failed_ac_{last_start_of_episode}_{global_step}.pt")
         obs = next_obs
         if terminations or truncations:
+            return_with_penalty= 0 
             last_start_of_episode = global_step+1
             obs, infos = envs.reset()
         # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
+
     for global_step_training in range(perf_global_step, end_step):
         # ALGO LOGIC: training  start if performance_actor_o
         if global_step_training>= args.learning_starts:

@@ -26,7 +26,7 @@ from envs.halfcheetah_cost_wrapper import RewardWrapperHalfcheetahHyperPlane
 class Args:
     exp_name: str = "DoubleLearningSACHalfcheetahTrainFromFilter"#os.path.basename(__file__)[: -len(".py")]
     """the name of this experiment"""
-    seed: int = 44
+    seed: int = 78
     """seed of the experiment"""
     torch_deterministic: bool = True
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
@@ -38,7 +38,7 @@ class Args:
     """the wandb's project name"""
     wandb_entity: str = None
     """the entity (team) of wandb's project"""
-    capture_video: bool = False
+    capture_video: bool = True
     """whether to capture videos of the agent performances (check out `videos` folder)"""
 
     # Algorithm specific arguments
@@ -81,9 +81,13 @@ class Args:
     "Initial training steps for saftey barriers"
     s_steps_per_epoch: int = 30000
     "Steps in environment per training epoch. If terminated during this steps new episode is started till 4000 is reached"
-    s_epoch_retrain: int = 10
+    s_epoch_retrain_threshold: int = 5
+    "Penalize safe action deviation?"
+    penalize_reward: bool = True
+    "Factor multiplied with safe action deviation"
+    penalize_reward_factor: float = 1
     "Number of epochs to retrain safety barriers after every performance actor update"
-    safety_filter_default_path = "model_safety_default_halfcheetah.pt"
+    safety_filter_default_path = "model_safety_default_halfcheetah_until_safe.pt"
 
 
 def make_env_safety_halfcheetah(env_id, seed, idx, capture_video, run_name):
@@ -94,8 +98,8 @@ def make_env_safety_halfcheetah(env_id, seed, idx, capture_video, run_name):
         else:
             env = gymnasium.make(env_id)
         env = gymnasium.wrappers.RecordEpisodeStatistics(env)
-        env = RewardWrapperHalfcheetahHyperPlane(env, safety_reward = True)
         env.action_space.seed(seed)
+        env = RewardWrapperHalfcheetahHyperPlane(env, safety_reward = True)
         return env
 
     return thunk
@@ -153,7 +157,9 @@ if __name__ == "__main__":
         )
     wandb.define_metric("agent_eval_safety/env_step")
     wandb.define_metric("agent_eval_safety/episode_reward", step_metric="agent_eval_safety/env_step")
-    wandb.define_metric("agent_eval_safety/CartpoleBorderDecisions", step_metric="agent_eval_safety/env_step")
+    wandb.define_metric("agent_eval_safety/episode_reward_with_bonus", step_metric="agent_eval_safety/env_step")
+    wandb.define_metric("agent_eval_safety/number_filtered", step_metric="agent_eval_safety/env_step")
+    wandb.define_metric("agent_eval_safety/number_clipped", step_metric="agent_eval_safety/env_step")
 
 
     wandb.define_metric("agent_train_safety/env_step")
@@ -169,8 +175,8 @@ if __name__ == "__main__":
     wandb.define_metric("agent_eval_performance/env_step")
     wandb.define_metric("agent_eval_performance/episode_reward", step_metric="agent_eval_performance/env_step")
     wandb.define_metric("agent_eval_performance/count_failure", step_metric="agent_eval_performance/env_step")
-
-
+    wandb.define_metric("agent_eval_performance/episode_reward_with_penalty", step_metric="agent_eval_performance/env_step")
+    
     wandb.define_metric("agent_train_performance/env_step")
     wandb.define_metric("agent_train_performance/qf1_values",step_metric="agent_train_performance/env_step")
     wandb.define_metric("agent_train_performance/qf2_values",step_metric="agent_train_performance/env_step")

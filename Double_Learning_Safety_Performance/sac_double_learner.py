@@ -14,6 +14,9 @@ import tyro
 from stable_baselines3.common.buffers import ReplayBuffer
 import wandb
 import pickle
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+import math
 # ALGO LOGIC: initialize agent here:
 class SoftQNetwork(nn.Module):
     def __init__(self, env):
@@ -122,6 +125,7 @@ def maybe_update_performance_actor(safe_actor_new, performance_actor_old, env_fn
     start_time = time.time()
 
     # TRY NOT TO MODIFY: start the game
+    return_with_penalty = 0
     obs, _ = envs.reset(seed=args.seed)
     last_start_of_episode = 0
     if performance_actor_old is None:
@@ -141,6 +145,10 @@ def maybe_update_performance_actor(safe_actor_new, performance_actor_old, env_fn
         action,_,_ = safe_actor_new.filter_actions_from_numpyarray(a_h,b_h,actions_per)
         # TRY NOT TO MODIFY: execute the game and log data.
         next_obs, rewards, terminations, truncations, infos = envs.step(action)
+        #Penalize reward by deviation from safe action
+        if args.penalize_reward:
+            rewards = rewards - args.penalize_reward_factor * np.power(np.sum(np.power(actions_per-action,2)),2)
+            return_with_penalty += rewards
         if terminations == True:
             count_failure+=1
         # TRY NOT TO MODIFY: record rewards for plotting purposes
@@ -149,7 +157,8 @@ def maybe_update_performance_actor(safe_actor_new, performance_actor_old, env_fn
                 print(f"global_step={global_step}, episodic_return={infos['episode']['r']}")
                 data = {"agent_eval_performance/env_step": global_step,
                     "agent_eval_performance/count_failure":count_failure,
-                        "agent_eval_performance/episode_reward": infos['episode']['r']}
+                        "agent_eval_performance/episode_reward": infos['episode']['r'],
+                        "agent_eval_performance/episode_reward_with_penalty": return_with_penalty}
                 wandb.log(data)
 
         # TRY NOT TO MODIFY: save data to reply buffer; handle `final_observation`
@@ -163,9 +172,11 @@ def maybe_update_performance_actor(safe_actor_new, performance_actor_old, env_fn
             torch.save(ac_sac, f"{output_dir}/terminated/failed_ac_{last_start_of_episode}_{global_step}.pt")
         obs = next_obs
         if terminations or truncations:
+            return_with_penalty= 0 
             last_start_of_episode = global_step+1
             obs, infos = envs.reset()
         # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
+
     for global_step_training in range(perf_global_step, end_step):
         # ALGO LOGIC: training  start if performance_actor_o
         if global_step_training>= args.learning_starts:
@@ -232,5 +243,33 @@ def maybe_update_performance_actor(safe_actor_new, performance_actor_old, env_fn
                     "agent_train_performance/alpha_loss": alpha_loss.item() if args.autotune else 0
                 }
                 wandb.log(data)
+    #Eval value function of critic
+    
+    safe_radians = 24 * 2 * math.pi / 360
+    borders = []
+    safe_x=2.4
+    fig = plt.figure(num =1, figsize=(8, 8), clear=True)
+    ax = fig.add_subplot(111)
+    colors_v = []
+    for x in np.arange(-2.4-2.4,2.5+2.4,0.2):
+        for theta in np.arange(-safe_radians*2,safe_radians*2,math.pi / 360 *8):
+            o=torch.as_tensor([[x,0,theta,0]], dtype=torch.float32, device="cuda:0")
+            actions, _, _ = ac_sac.actor.get_action(o)
+            qf1_a_values = ac_sac.qf1_target(o, actions).view(-1)
+            qf2_a_values = ac_sac.qf2_target(o, actions).view(-1)
+            v = (torch.min(qf1_a_values, qf2_a_values)).detach().cpu().numpy()
+            colors_v.append(v)
+            borders.append([x,theta])
+    borders = np.array(borders)
+    rectangle = patches.Rectangle((-safe_x, -safe_radians), 2*safe_x, 2*safe_radians, linewidth=2, edgecolor='green', facecolor='white')
+    ax.add_patch(rectangle)
+    value_plot=plt.scatter(borders[:,0], borders[:,1], c= colors_v, cmap ="viridis", s=30)
+    plt.axis([-2*safe_x, 2*safe_x, -2*safe_radians, 2*safe_radians])
+    plt.colorbar(value_plot, label="Value function value")            
+    plt.xlabel("X")
+    plt.ylabel("Theta")
+    plt.title("Value function performance agent")
+    plot1 = wandb.Image(plt)
+    wandb.log(data={"agent_train_performance/safeValueFunction": plot1})
     envs.close()
     return ac_sac, global_step, count_failure

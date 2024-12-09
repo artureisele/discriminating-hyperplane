@@ -175,7 +175,7 @@ class CartPole(gym.Env[np.ndarray, Union[int, np.ndarray]]):
             reward=-1
         if self.render_mode == "human":
             self.render()
-        return np.array(self.state, dtype=np.float32), reward, terminated, False, {}
+        return np.array(self.state, dtype=np.float32), reward, terminated, False, {"bonus":bonus}
     
 
     def reset(

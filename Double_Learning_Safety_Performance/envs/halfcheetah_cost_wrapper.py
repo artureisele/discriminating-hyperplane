@@ -39,11 +39,12 @@ class RewardWrapperHalfcheetahHyperPlane(Wrapper[ObsType, ActType, ObsType, ActT
         observation, reward, terminated, truncated, info = self.env.step(action)
         if observation[0] >= -0.3:
             if self.safety_reward:
-                reward = 1
+                reward = 1 + bonus
             terminated = False
         else:
             if self.safety_reward:
                 reward = -100
             terminated = True
         observation = observation.astype(np.float32)
+        info["bonus"] = bonus
         return observation, reward, terminated, truncated, info
