@@ -23,9 +23,9 @@ from pathlib import Path
 from utils.run_utils import setup_logger_kwargs
 @dataclass
 class Args:
-    exp_name: str = "DoubleLearningSACCartpoleFullEvalTrainUntilSafeStartFromWherePerf"#os.path.basename(__file__)[: -len(".py")]
+    exp_name: str = "DoubleLearningSACCartpoleFullEvalTrainUntilSafe"#os.path.basename(__file__)[: -len(".py")]
     """the name of this experiment"""
-    seed: int = 55
+    seed: int = 78
     """seed of the experiment"""
     torch_deterministic: bool = True
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
@@ -37,7 +37,7 @@ class Args:
     """the wandb's project name"""
     wandb_entity: str = None
     """the entity (team) of wandb's project"""
-    capture_video: bool = True
+    capture_video: bool = False
     """whether to capture videos of the agent performances (check out `videos` folder)"""
 
     # Algorithm specific arguments
@@ -80,13 +80,13 @@ class Args:
     "Initial training steps for saftey barriers"
     s_steps_per_epoch: int = 4000
     "Steps in environment per training epoch. If terminated during this steps new episode is started till 4000 is reached"
-    s_epoch_retrain_threshold: int = 5
+    s_epoch_retrain_threshold: int = 10
     "Penalize safe action deviation?"
     penalize_reward: bool = True
     "Factor multiplied with safe action deviation"
-    penalize_reward_factor: float = 0
+    penalize_reward_factor: float = 1
     "Number of epochs to retrain safety barriers after every performance actor update"
-    safety_filter_default_path = "model_safety_default_until_safe8.pt"
+    safety_filter_default_path = "model_safety_default_until_safe5.pt"
 
 def make_env_safety(env_id, seed, idx, capture_video, run_name):
     def thunk():
@@ -195,20 +195,20 @@ if __name__ == "__main__":
     logger_kwargs = setup_logger_kwargs(args.exp_name, args.env_id, args.seed)
     output_dir = logger_kwargs["output_dir"]
     log_training_switches(performance=False)
-    starting_states = None
+
     if not Path(args.safety_filter_default_path).is_file():
-        safety_actor, safety_global_step, starting_states = maybe_update_safe_actor(None, None, s_env_fn, args, 0, logger_kwargs, starting_states)
+        safety_actor, safety_global_step = maybe_update_safe_actor(None, None, s_env_fn, args, 0, logger_kwargs)
         save_safety_actor(safety_actor=safety_actor, path=args.safety_filter_default_path)
     else:
         print(f"Load {args.safety_filter_default_path} safety model")
         safety_actor = torch.load(args.safety_filter_default_path)
         safety_global_step = 0
     log_training_switches(performance=True)
-    # Just initialize the actor
+
     performance_actor, global_step, count_failure = maybe_update_performance_actor(safety_actor,None, p_env_fn,args,0,0, output_dir)
     print("Initial Learning finished")
     for i in range(0, args.double_learning_iterations):
         log_training_switches(performance=False)
-        safety_actor, safety_global_step, starting_states= maybe_update_safe_actor(safety_actor, performance_actor, s_env_fn, args, safety_global_step,logger_kwargs, starting_states)
+        safety_actor, safety_global_step= maybe_update_safe_actor(safety_actor, performance_actor, s_env_fn, args, safety_global_step,logger_kwargs)
         log_training_switches(performance=True)
         performance_actor, global_step, count_failure = maybe_update_performance_actor(safety_actor, performance_actor, p_env_fn, args,global_step, count_failure, output_dir)

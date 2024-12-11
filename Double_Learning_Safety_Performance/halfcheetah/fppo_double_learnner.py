@@ -85,8 +85,7 @@ def evaluate(eval_env, env_steps_count,ac, performance_actor_new):
                     "agent_eval_safety/CartpoleBorderDecisions": wandb.Image(plt)},
             step=env_steps_count)
     plt.close()  # Close plot to avoid replotting issues
-def evaluate2(eval_env, env_steps_count, ac, performance_actor_new, potential_starting_states, starting_states):
-    print("StartEval2")
+def evaluate2(eval_env, env_steps_count, ac, performance_actor_new):
     evalReturn = 0
     evalReturnWithBonus = 0
     evalSteps = 500
@@ -96,18 +95,10 @@ def evaluate2(eval_env, env_steps_count, ac, performance_actor_new, potential_st
     colors=[]
     filtered = 0
     clipped = 0
-    maybe_potential_starting_states = []
     for i in range(evalIters):
         d = False
         steps = 0
-        if starting_states == None:
-            print("Random starting State")
-            o, _ = eval_env.reset()
-        else:
-            if random.random()>0.5:
-                o,_ = eval_env.reset(options ={"state":random.choice(starting_states)})
-            else:
-                o, _ = eval_env.reset()
+        o, _ = eval_env.reset()
         while(not (d or (steps%evalSteps==0 and steps != 0)) ):
             a, a_h, b_h, v = ac.stepEval(torch.as_tensor(o, dtype=torch.float32))
             if performance_actor_new is not None:
@@ -118,9 +109,11 @@ def evaluate2(eval_env, env_steps_count, ac, performance_actor_new, potential_st
                     filtered = filtered +1
                 if c:
                     clipped = clipped+1
-            if steps%50 == 0 and steps <=100 and steps>0:
-                maybe_potential_starting_states.append(o)
             next_o, r, d,truncated, info = eval_env.step(a)
+            test_numbers = np.random.uniform(-1, 1, 1000)
+            percentage_not_filtered = np.mean(a_h * test_numbers >= b_h)
+            r += percentage_not_filtered*0.5
+            info["bonus"]=info["bonus"]+ percentage_not_filtered*0.5
             evalReturnWithBonus+=r
             evalReturn+=r- info["bonus"]
             steps +=1
@@ -133,8 +126,8 @@ def evaluate2(eval_env, env_steps_count, ac, performance_actor_new, potential_st
             borders.append([o[0],o[2],to_right_is_dangerous, threshold])
             colors.append(steps/500)
             o = next_o
-    fig = plt.figure(figsize=(8, 8))
-    ax = fig.add_subplot(111)
+    fig = plt.figure(figsize=(8, 8), num=1, clear=True)
+    ax = fig.add_subplot()
     arrowDirX=[]
     arrowDirY=[]
     for _,_,to_right_is_dangerous, threshold in borders:
@@ -168,15 +161,14 @@ def evaluate2(eval_env, env_steps_count, ac, performance_actor_new, potential_st
     plt.ylabel("Theta")
     plt.title("Cartpole Trajectory")
     plot1 = wandb.Image(plt)
-    plt.close()
 
     safe_radians = 24 * 2 * math.pi / 360
     borders = []
     arrowDirX=[]
     arrowDirY=[]
     safe_x=2.4
-    fig = plt.figure(figsize=(8, 8))
-    ax = fig.add_subplot(111)
+    fig = plt.figure(figsize=(8, 8), num=1, clear=True)
+    ax = fig.add_subplot()
     colors = []
     colors_v = []
     for x in np.arange(-2.4-2.4,2.5+2.4,0.2):
@@ -209,9 +201,8 @@ def evaluate2(eval_env, env_steps_count, ac, performance_actor_new, potential_st
     plt.ylabel("Theta")
     plt.title("Cartpole Border Decisions")
     plot2 = wandb.Image(plt)
-    plt.close()
-    fig = plt.figure(figsize=(8, 8))
-    ax = fig.add_subplot(111)
+    fig = plt.figure(figsize=(8, 8), num=1, clear=True)
+    ax = fig.add_subplot()
     rectangle = patches.Rectangle((-safe_x, -safe_radians), 2*safe_x, 2*safe_radians, linewidth=2, edgecolor='green', facecolor='white')
     ax.add_patch(rectangle)
     value_plot=plt.scatter(borders[:,0], borders[:,1], c= colors_v, cmap ="viridis", s=30)
@@ -222,7 +213,8 @@ def evaluate2(eval_env, env_steps_count, ac, performance_actor_new, potential_st
     plt.ylabel("Theta")
     plt.title("Value function")
     plot3 = wandb.Image(plt)
-    plt.close()
+
+
     evalReturn/=evalIters
     evalReturnWithBonus/=evalIters
     # Log the plot to WandB
@@ -235,9 +227,7 @@ def evaluate2(eval_env, env_steps_count, ac, performance_actor_new, potential_st
                     "agent_eval_safety/CartpoleBorderDecisions": plot2,
                     "agent_eval_safety/CartpoleValueFunction": plot3},
             step=env_steps_count)
-    if evalReturn == evalSteps*max_reward:
-        potential_starting_states +=maybe_potential_starting_states
-    return evalReturn == evalSteps*max_reward, potential_starting_states
+    return evalReturn == evalSteps*max_reward
 
 class PPOBuffer:
     """
@@ -337,7 +327,7 @@ class PPOBuffer:
 def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs_retrain_threshold=50, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
         vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97, max_ep_len=1000,
-        target_kl=0.01, logger_kwargs=dict(), save_freq=1, lagrangian=False, performance_actor_new = None, safe_actor = None, safety_global_step = 0, starting_states = None):
+        target_kl=0.01, logger_kwargs=dict(), save_freq=1, lagrangian=False, performance_actor_new = None, safe_actor = None, safety_global_step = 0):
     """
     Proximal Policy Optimization (by clipping), 
 
@@ -570,13 +560,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Prepare for interaction with environment
     start_time = time.time()
-    if starting_states == None:
-        o, _ = env.reset()
-    else:
-        if random.random()>0.5:
-            o,_ = env.reset(options ={"state":random.choice(starting_states)})
-        else:
-            o, _ = env.reset()
+    o, _ = env.reset()
     ep_ret,ep_cret, ep_len = 0,0,0
     env_steps_count = safety_global_step
     # Main loop: collect experience in env and update/log each epoch
@@ -585,10 +569,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     frames=[]
     epoch = -1
     safety_assured_counter = 0
-    potential_starting_states = []
     while True:
-        print("Iterate PPO")
-        print(safety_assured_counter)
         if safety_assured_counter>=epochs_retrain_threshold:
             wandb.log({"epoch_until_safe": epoch})
             break
@@ -596,11 +577,14 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         for t in range(local_steps_per_epoch):
             a, a_h, b_h, v, logp_a, logp_b = ac.step(torch.as_tensor(o, dtype=torch.float32))
             if performance_actor_new is not None:
-                actions_per, _, actions_med = performance_actor_new.actor.get_action(torch.Tensor(o).to("cuda:0").unsqueeze(0))
-                actions_med = actions_med.detach().cpu().numpy()
-                actions_med[0] + np.random.normal(loc=0, scale=0.1, size=1)
-                a,filtered,projected = ac.filter_actions_from_numpyarray(a_h,b_h,actions_med[0])
+                actions_per, _, _ = performance_actor_new.actor.get_action(torch.Tensor(o).to("cuda:0").unsqueeze(0))
+                actions_per = actions_per.detach().cpu().numpy()
+                a,filtered,projected = ac.filter_actions_from_numpyarray(a_h,b_h,actions_per[0])
             next_o, r, d, truncated, info = env.step(a)
+            test_numbers = np.random.uniform(-1, 1, 1000)
+            percentage_not_filtered = np.mean(a_h * test_numbers >= b_h)
+            r += percentage_not_filtered*0.5
+            info["bonus"]=info["bonus"]+ percentage_not_filtered*0.5
             ep_ret += r
             ep_len += 1
             env_steps_count +=1
@@ -628,16 +612,10 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 if terminal:
                     # only save EpRet / EpLen if trajectory finished
                     logger.store(EpRet=ep_ret, EpLen=ep_len)
-                    if starting_states == None:
-                        o, _ = env.reset()
-                    else:
-                        if random.random()>0.5:
-                            o,_ = env.reset(options ={"state":random.choice(starting_states)})
-                        else:
-                            o, _ = env.reset()
+                o, _ = env.reset()
                 ep_ret, ep_len = 0,0
 
-        safety_assured, potential_starting_states = evaluate2(eval_env, env_steps_count, ac, performance_actor_new, potential_starting_states, starting_states)
+        safety_assured = evaluate2(eval_env, env_steps_count, ac, performance_actor_new)
         if safety_assured:
             safety_assured_counter +=1
         else:
@@ -647,14 +625,10 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             vals = logger.epoch_dict['EpRet']
             stats = mpi_statistics_scalar(vals, with_min_and_max=True)
             logger.save_state({'env': env}, None)
+
         # Perform PPO update!
         update(env_steps_count)
         # Log info about epoch
-        if (safety_assured_counter == epochs_retrain_threshold):
-            if starting_states is None:
-                starting_states= potential_starting_states[epochs_retrain_threshold*-2:]
-            else:
-                starting_states += potential_starting_states[epochs_retrain_threshold*-2:]
         logger.log_tabular('Epoch', epoch)
         logger.log_tabular('EpRet', with_min_and_max=True)
         logger.log_tabular('EpLen', average_only=True)
@@ -670,9 +644,9 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('StopIter', average_only=True)
         logger.log_tabular('Time', time.time()-start_time)
         logger.dump_tabular()
-    return ac, env_steps_count, starting_states
+    return ac, env_steps_count
 
-def maybe_update_safe_actor(safe_actor_old, performance_actor_new, env_fn, args, safety_global_step, logger_kwargs, starting_states):
+def maybe_update_safe_actor(safe_actor_old, performance_actor_new, env_fn, args, safety_global_step, logger_kwargs):
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -682,57 +656,7 @@ def maybe_update_safe_actor(safe_actor_old, performance_actor_new, env_fn, args,
     #    epochs = int(num_steps / args.s_steps_per_epoch)
     #else:
     #    epochs = args.s_epoch_retrain
-    # Sample starting states for filter learning
-    envs = env_fn()
-    device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
-    """
-    if performance_actor_new is None:
-        starting_states = None
-    else:
-        starting_states = []
-        colors = []
-        obs, _ = envs.reset(seed=args.seed)
-        i = 0
-        while len(starting_states) < 100:
-            terminations = False
-            steps = 0
-            while not terminations:
-                if steps % 50 == 0:
-                    starting_states.append(obs)
-                    colors.append(i)
-                actions_per, _, _ = performance_actor_new.actor.get_action(torch.Tensor(obs).to(device).unsqueeze(0))
-                actions_per = actions_per.detach().cpu().numpy()
-                actions_per = actions_per[0]
-                #FILTER ACTION HERE SAFETY
-                _, a_h, b_h, v = safe_actor_old.stepEval(torch.as_tensor(obs, dtype=torch.float32))
-                action,_,_ = safe_actor_old.filter_actions_from_numpyarray(a_h,b_h,actions_per)
-                # TRY NOT TO MODIFY: execute the game and log data.
-                next_obs, rewards, terminations, truncations, infos = envs.step(action)
-                obs = next_obs
-                steps+=1
-            i+=1
-            obs, _ = envs.reset(seed=args.seed)
-    """
-    if not starting_states is None:
-        safe_x = 2.4
-        safe_radians = 24 * 2 * math.pi / 360
-        fig = plt.figure(figsize=(8, 8))
-        ax = fig.add_subplot(111)
-        rectangle = patches.Rectangle((-safe_x, -safe_radians), 2*safe_x, 2*safe_radians, linewidth=2, edgecolor='green', facecolor='white')
-        ax.add_patch(rectangle)
-        value_plot=plt.scatter(np.array(starting_states)[:,0], np.array(starting_states)[:,2])
-        # This are the borders of the simulation
-        plt.axis([-2*safe_x, 2*safe_x, -2*safe_radians, 2*safe_radians])
-        plt.colorbar(value_plot, label="Value function values")            
-        plt.xlabel("X")
-        plt.ylabel("Theta")
-        plt.title("Value function")
-        plot3 = wandb.Image(plt)
-        wandb.log({"Starting States": plot3})
-        plt.close()
-        print(len(starting_states))
-    # TRY NOT TO MODIFY: save data to reply buffer; handle `final_observation
     return ppo(env_fn=env_fn, actor_critic=core.SafeMLPActorCritic,
         ac_kwargs=dict(hidden_sizes=[args.s_hid]*args.s_l), gamma=args.s_gamma, 
         seed=args.seed, steps_per_epoch=args.s_steps_per_epoch, epochs_retrain_threshold=args.s_epoch_retrain_threshold,
-        logger_kwargs=logger_kwargs, lagrangian=False, performance_actor_new = performance_actor_new, safe_actor=safe_actor_old, safety_global_step=safety_global_step, starting_states = starting_states)
+        logger_kwargs=logger_kwargs, lagrangian=False, performance_actor_new = performance_actor_new, safe_actor=safe_actor_old, safety_global_step=safety_global_step)

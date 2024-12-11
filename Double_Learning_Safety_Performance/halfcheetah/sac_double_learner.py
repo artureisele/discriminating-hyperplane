@@ -119,7 +119,6 @@ def maybe_update_performance_actor(safe_actor_new, performance_actor_old, env_fn
     count_failure = perf_global_failure_counter
     if performance_actor_old is None:
         ac_sac = ActorCriticSAC(envs=envs, device=device, args=args)
-        return ac_sac, 0, 0
     else:
         ac_sac = performance_actor_old
 
@@ -129,12 +128,10 @@ def maybe_update_performance_actor(safe_actor_new, performance_actor_old, env_fn
     return_with_penalty = 0
     obs, _ = envs.reset(seed=args.seed)
     last_start_of_episode = 0
-    if perf_global_step == 0:
+    if performance_actor_old is None:
         end_step = perf_global_step + args.learning_starts
     else:
         end_step = perf_global_step+args.p_retrain_steps
-    print("Update Perf Actor")
-    print(end_step)
     for global_step in range(perf_global_step, end_step):
         # ALGO LOGIC: put action logic here
         if performance_actor_old is None:
@@ -179,8 +176,7 @@ def maybe_update_performance_actor(safe_actor_new, performance_actor_old, env_fn
             last_start_of_episode = global_step+1
             obs, infos = envs.reset()
         # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
-    print("Start Training")
-    print(f"{perf_global_step}-{end_step}")
+
     for global_step_training in range(perf_global_step, end_step):
         # ALGO LOGIC: training  start if performance_actor_o
         if global_step_training>= args.learning_starts:
@@ -248,7 +244,6 @@ def maybe_update_performance_actor(safe_actor_new, performance_actor_old, env_fn
                 }
                 wandb.log(data)
     #Eval value function of critic
-    
     safe_radians = 24 * 2 * math.pi / 360
     borders = []
     safe_x=2.4

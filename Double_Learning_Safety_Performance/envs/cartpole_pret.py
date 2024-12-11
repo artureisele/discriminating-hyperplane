@@ -138,7 +138,7 @@ class CartPole(gym.Env[np.ndarray, Union[int, np.ndarray]]):
         return (x, x_dot, theta, theta_dot)
 
     def step(self, action):
-        bonus = 1 if -1<action and action<1 else 0
+        bonus = 0.5 if -1<action and action<1 else 0
         action = np.clip(action, [-1], [1])
         action = action.astype(np.float32)
         assert self.action_space.contains(action), f"{action!r} ({type(action)}) invalid"
