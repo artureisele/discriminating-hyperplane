@@ -121,6 +121,12 @@ def evaluate2(eval_env, env_steps_count, ac, performance_actor_new, potential_st
             if steps%50 == 0 and steps <=100 and steps>0:
                 maybe_potential_starting_states.append(o)
             next_o, r, d,truncated, info = eval_env.step(a)
+            #Regularization
+            #test_numbers = np.random.uniform(-1, 1, 100)
+            #percentage_not_filtered = np.mean(a_h * test_numbers >= b_h)
+            #r += percentage_not_filtered*0.5
+            #info["bonus"]=info["bonus"]+ percentage_not_filtered*0.5
+            
             evalReturnWithBonus+=r
             evalReturn+=r- info["bonus"]
             steps +=1
@@ -601,6 +607,11 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 actions_med[0] + np.random.normal(loc=0, scale=0.1, size=1)
                 a,filtered,projected = ac.filter_actions_from_numpyarray(a_h,b_h,actions_med[0])
             next_o, r, d, truncated, info = env.step(a)
+            #Regularization
+            #test_numbers = np.random.uniform(-1, 1, 100)
+            #percentage_not_filtered = np.mean(a_h * test_numbers >= b_h)
+            #r += percentage_not_filtered*0.5
+            #info["bonus"]=info["bonus"]+ percentage_not_filtered*0.5
             ep_ret += r
             ep_len += 1
             env_steps_count +=1

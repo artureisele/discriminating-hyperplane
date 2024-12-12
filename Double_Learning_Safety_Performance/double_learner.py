@@ -23,9 +23,9 @@ from pathlib import Path
 from utils.run_utils import setup_logger_kwargs
 @dataclass
 class Args:
-    exp_name: str = "DoubleLearningSACCartpoleFullEvalTrainUntilSafeStartFromWherePerf"#os.path.basename(__file__)[: -len(".py")]
+    exp_name: str = "Cartpole_Expanding_starting_states_large_sigma_perf_hyperplane_policy3"#os.path.basename(__file__)[: -len(".py")]
     """the name of this experiment"""
-    seed: int = 55
+    seed: int = 58
     """seed of the experiment"""
     torch_deterministic: bool = True
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
@@ -86,7 +86,7 @@ class Args:
     "Factor multiplied with safe action deviation"
     penalize_reward_factor: float = 0
     "Number of epochs to retrain safety barriers after every performance actor update"
-    safety_filter_default_path = "model_safety_default_until_safe8.pt"
+    safety_filter_default_path = "model_safety_default_until_safeX2.pt"
 
 def make_env_safety(env_id, seed, idx, capture_video, run_name):
     def thunk():
