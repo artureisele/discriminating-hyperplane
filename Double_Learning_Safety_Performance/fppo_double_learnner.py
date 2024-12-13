@@ -97,6 +97,47 @@ def evaluate2(eval_env, env_steps_count, ac, performance_actor_new, potential_st
     filtered = 0
     clipped = 0
     maybe_potential_starting_states = []
+    desired=[]
+    desired_color=[]
+    uniform = []
+    uniform_color = []
+    #Uniform Trajectories
+    for k in range(evalIters):
+        d = False
+        steps = 0
+        if starting_states == None:
+            print("Random starting State")
+            o, _ = eval_env.reset()
+        else:
+            if random.random()>0.5:
+                o,_ = eval_env.reset(options ={"state":random.choice(starting_states)})
+            else:
+                o, _ = eval_env.reset()
+        while(not (d or (steps%evalSteps==0 and steps != 0)) ):
+            uniform_a = np.random.uniform(-1,1,1)
+            next_o, r, d,truncated, info = eval_env.step(uniform_a)
+            uniform.append([o[0],o[2]])
+            uniform_color.append(k)
+            o = next_o
+    #Desired Trajectories
+    for j in range(evalIters):
+        d = False
+        steps = 0
+        if starting_states == None:
+            print("Random starting State")
+            o, _ = eval_env.reset()
+        else:
+            if random.random()>0.5:
+                o,_ = eval_env.reset(options ={"state":random.choice(starting_states)})
+            else:
+                o, _ = eval_env.reset()
+        while(not (d or (steps%evalSteps==0 and steps != 0)) ):
+            actions_per, _, actions_med, _ = performance_actor_new.actor.get_action(torch.Tensor(o).to("cuda:0").unsqueeze(0))
+            actions_per = actions_per.detach().cpu().numpy()
+            next_o, r, d,truncated, info = eval_env.step(actions_per[0])
+            desired.append([o[0],o[2]])
+            desired_color.append(j)
+            o = next_o
     for i in range(evalIters):
         d = False
         steps = 0
@@ -111,7 +152,7 @@ def evaluate2(eval_env, env_steps_count, ac, performance_actor_new, potential_st
         while(not (d or (steps%evalSteps==0 and steps != 0)) ):
             a, a_h, b_h, v = ac.stepEval(torch.as_tensor(o, dtype=torch.float32))
             if performance_actor_new is not None:
-                actions_per, _, _ = performance_actor_new.actor.get_action(torch.Tensor(o).to("cuda:0").unsqueeze(0))
+                actions_per, _, actions_med, _ = performance_actor_new.actor.get_action(torch.Tensor(o).to("cuda:0").unsqueeze(0))
                 actions_per = actions_per.detach().cpu().numpy()
                 a,f,c = ac.filter_actions_from_numpyarray(a_h,b_h,actions_per[0])
                 if f:
@@ -205,6 +246,8 @@ def evaluate2(eval_env, env_steps_count, ac, performance_actor_new, potential_st
                 arrowDirY.append(1)
                 colors.append(threshold)
     borders = np.array(borders)
+    desired = np.array(desired)
+    uniform = np.array(uniform)
     rectangle = patches.Rectangle((-safe_x, -safe_radians), 2*safe_x, 2*safe_radians, linewidth=2, edgecolor='green', facecolor='white')
     ax.add_patch(rectangle)
     quiver_plot=plt.quiver(borders[:,0], borders[:,1], arrowDirX, arrowDirY,colors, cmap ="viridis", angles='xy', scale_units='xy', scale=25)
@@ -229,6 +272,34 @@ def evaluate2(eval_env, env_steps_count, ac, performance_actor_new, potential_st
     plt.title("Value function")
     plot3 = wandb.Image(plt)
     plt.close()
+    #Plot what performance Policy wants
+    fig = plt.figure(figsize=(8, 8))
+    ax = fig.add_subplot(111)
+    rectangle = patches.Rectangle((-safe_x, -safe_radians), 2*safe_x, 2*safe_radians, linewidth=2, edgecolor='green', facecolor='white')
+    ax.add_patch(rectangle)
+    value_plot=plt.scatter(desired[:,0], desired[:,1], c= desired_color, cmap ="viridis", s=30)
+    # This are the borders of the simulation
+    plt.axis([-2*safe_x, 2*safe_x, -2*safe_radians, 2*safe_radians])
+    plt.colorbar(value_plot, label="trajectory index")            
+    plt.xlabel("X")
+    plt.ylabel("Theta")
+    plt.title("Desired Trajectories")
+    plot4 = wandb.Image(plt)
+    plt.close()
+    #Plot what Uniform Policy explores
+    fig = plt.figure(figsize=(8, 8))
+    ax = fig.add_subplot(111)
+    rectangle = patches.Rectangle((-safe_x, -safe_radians), 2*safe_x, 2*safe_radians, linewidth=2, edgecolor='green', facecolor='white')
+    ax.add_patch(rectangle)
+    value_plot=plt.scatter(uniform[:,0], uniform[:,1], c= uniform_color, cmap ="viridis", s=30)
+    # This are the borders of the simulation
+    plt.axis([-2*safe_x, 2*safe_x, -2*safe_radians, 2*safe_radians])
+    plt.colorbar(value_plot, label="trajectory index")            
+    plt.xlabel("X")
+    plt.ylabel("Theta")
+    plt.title("Uniform Trajectories")
+    plot5 = wandb.Image(plt)
+    plt.close()
     evalReturn/=evalIters
     evalReturnWithBonus/=evalIters
     # Log the plot to WandB
@@ -239,7 +310,9 @@ def evaluate2(eval_env, env_steps_count, ac, performance_actor_new, potential_st
                     "agent_eval_safety/number_clipped": clipped,
                     "agent_eval_safety/CartpoleTrajectory": plot1,
                     "agent_eval_safety/CartpoleBorderDecisions": plot2,
-                    "agent_eval_safety/CartpoleValueFunction": plot3},
+                    "agent_eval_safety/CartpoleValueFunction": plot3,
+                    "agent_eval_safety/desired_trajectories": plot4,
+                    "agent_eval_safety/uniform_trajectories": plot5},
             step=env_steps_count)
     if evalReturn == evalSteps*max_reward:
         potential_starting_states +=maybe_potential_starting_states
@@ -343,7 +416,7 @@ class PPOBuffer:
 def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs_retrain_threshold=50, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
         vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97, max_ep_len=1000,
-        target_kl=0.01, logger_kwargs=dict(), save_freq=1, lagrangian=False, performance_actor_new = None, safe_actor = None, safety_global_step = 0, starting_states = None):
+        target_kl=0.01, logger_kwargs=dict(), save_freq=1, lagrangian=False, performance_actor_new = None, safe_actor = None, safety_global_step = 0, starting_states = None, learn_starting_states=False, training_policy = "standards", sigma = 0):
     """
     Proximal Policy Optimization (by clipping), 
 
@@ -468,6 +541,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Create actor-critic module
     if safe_actor is None:
         ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
+        return ac, 0, None
     else: 
         ac = safe_actor
     # Sync params across processes
@@ -602,10 +676,24 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         for t in range(local_steps_per_epoch):
             a, a_h, b_h, v, logp_a, logp_b = ac.step(torch.as_tensor(o, dtype=torch.float32))
             if performance_actor_new is not None:
-                actions_per, _, actions_med = performance_actor_new.actor.get_action(torch.Tensor(o).to("cuda:0").unsqueeze(0))
-                actions_med = actions_med.detach().cpu().numpy()
-                actions_med[0] + np.random.normal(loc=0, scale=0.1, size=1)
-                a,filtered,projected = ac.filter_actions_from_numpyarray(a_h,b_h,actions_med[0])
+                stdUP = False
+                median = False
+                if training_policy=="sigma":
+                    actions_sam, _, actions_med, std= performance_actor_new.actor.get_action(torch.Tensor(o).to("cuda:0").unsqueeze(0))
+                    if std >sigma:
+                        actions_per = actions_sam.detach().cpu().numpy()
+                    else:
+                        actions_med = actions_med.detach().cpu().numpy()
+                        actions_med[0] += np.random.normal(loc=0, scale=sigma, size=1)
+                        actions_per = actions_med
+                if training_policy =="standard":
+                    actions_sam, _, actions_med, std= performance_actor_new.actor.get_action(torch.Tensor(o).to("cuda:0").unsqueeze(0))
+                    actions_per = actions_sam.detach().cpu().numpy()
+                if training_policy == "median":
+                    actions_sam, _, actions_med, std= performance_actor_new.actor.get_action(torch.Tensor(o).to("cuda:0").unsqueeze(0))
+                    actions_per = actions_med.detach().cpu().numpy()
+                if training_policy != "uniform":
+                    a,filtered,projected = ac.filter_actions_from_numpyarray(a_h,b_h,actions_per[0])
             next_o, r, d, truncated, info = env.step(a)
             #Regularization
             #test_numbers = np.random.uniform(-1, 1, 100)
@@ -662,10 +750,12 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         update(env_steps_count)
         # Log info about epoch
         if (safety_assured_counter == epochs_retrain_threshold):
-            if starting_states is None:
-                starting_states= potential_starting_states[epochs_retrain_threshold*-2:]
-            else:
-                starting_states += potential_starting_states[epochs_retrain_threshold*-2:]
+            if learn_starting_states:
+                if starting_states is None:
+                    starting_states= potential_starting_states[epochs_retrain_threshold*-2:]
+                else:
+                    starting_states += potential_starting_states[epochs_retrain_threshold*-2:]
+
         logger.log_tabular('Epoch', epoch)
         logger.log_tabular('EpRet', with_min_and_max=True)
         logger.log_tabular('EpLen', average_only=True)
@@ -746,4 +836,4 @@ def maybe_update_safe_actor(safe_actor_old, performance_actor_new, env_fn, args,
     return ppo(env_fn=env_fn, actor_critic=core.SafeMLPActorCritic,
         ac_kwargs=dict(hidden_sizes=[args.s_hid]*args.s_l), gamma=args.s_gamma, 
         seed=args.seed, steps_per_epoch=args.s_steps_per_epoch, epochs_retrain_threshold=args.s_epoch_retrain_threshold,
-        logger_kwargs=logger_kwargs, lagrangian=False, performance_actor_new = performance_actor_new, safe_actor=safe_actor_old, safety_global_step=safety_global_step, starting_states = starting_states)
+        logger_kwargs=logger_kwargs, lagrangian=False, performance_actor_new = performance_actor_new, safe_actor=safe_actor_old, safety_global_step=safety_global_step, starting_states = starting_states, learn_starting_states=args.learning_starting_states, training_policy= args.training_policy, sigma = args.sigma)
