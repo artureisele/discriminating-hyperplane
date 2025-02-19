@@ -71,7 +71,7 @@ class Actor(nn.Module):
         log_prob -= torch.log(self.action_scale * (1 - y_t.pow(2)) + 1e-6)
         log_prob = log_prob.sum(1, keepdim=True)
         mean = torch.tanh(mean) * self.action_scale + self.action_bias
-        return action, log_prob, mean
+        return action, log_prob, mean, std
 
 class ActorCriticSAC:
     def __init__(self, envs, device, args):
@@ -125,16 +125,18 @@ def maybe_update_performance_actor(safe_actor_new, performance_actor_old, env_fn
     return_with_penalty = 0
     obs, _ = envs.reset(seed=args.seed)
     last_start_of_episode = 0
-    if performance_actor_old is None:
+    if perf_global_step == 0:
         end_step = perf_global_step + args.learning_starts
     else:
         end_step = perf_global_step+args.p_retrain_steps
+    print("Update Perf Actor")
+    print(f"{perf_global_step}-{end_step}")
     for global_step in range(perf_global_step, end_step):
         # ALGO LOGIC: put action logic here
         if performance_actor_old is None:
             actions_per = envs.action_space.sample() 
         else:
-            actions_per, _, _ = ac_sac.actor.get_action(torch.Tensor(obs).to(device).unsqueeze(0))
+            actions_per, _, _, std= ac_sac.actor.get_action(torch.Tensor(obs).to(device).unsqueeze(0))
             actions_per = actions_per.detach().cpu().numpy()
             actions_per = actions_per[0]
         #FILTER ACTION HERE SAFETY
@@ -173,13 +175,13 @@ def maybe_update_performance_actor(safe_actor_new, performance_actor_old, env_fn
             last_start_of_episode = global_step+1
             obs, infos = envs.reset()
         # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
-
+    print(f"{perf_global_step}-{end_step}")
     for global_step_training in range(perf_global_step, end_step):
         # ALGO LOGIC: training  start if performance_actor_o
-        if global_step_training>= args.learning_starts:
+        if global_step_training>= args.learning_starts-1000:
             data = ac_sac.rb.sample(args.batch_size)
             with torch.no_grad():
-                next_state_actions, next_state_log_pi, _ = ac_sac.actor.get_action(data.next_observations)
+                next_state_actions, next_state_log_pi, _, std= ac_sac.actor.get_action(data.next_observations)
                 qf1_next_target = ac_sac.qf1_target(data.next_observations, next_state_actions)
                 qf2_next_target = ac_sac.qf2_target(data.next_observations, next_state_actions)
                 min_qf_next_target = torch.min(qf1_next_target, qf2_next_target) - ac_sac.alpha * next_state_log_pi
@@ -200,7 +202,7 @@ def maybe_update_performance_actor(safe_actor_new, performance_actor_old, env_fn
                 for _ in range(
                     args.policy_frequency
                 ):  # compensate for the delay by doing 'policy_frequency' instead of 1
-                    pi, log_pi, _ = ac_sac.actor.get_action(data.observations)
+                    pi, log_pi, _, std = ac_sac.actor.get_action(data.observations)
                     qf1_pi = ac_sac.qf1(data.observations, pi)
                     qf2_pi = ac_sac.qf2(data.observations, pi)
                     min_qf_pi = torch.min(qf1_pi, qf2_pi)
@@ -212,7 +214,7 @@ def maybe_update_performance_actor(safe_actor_new, performance_actor_old, env_fn
 
                     if args.autotune:
                         with torch.no_grad():
-                            _, log_pi, _ = ac_sac.actor.get_action(data.observations)
+                            _, log_pi, _, std = ac_sac.actor.get_action(data.observations)
                         alpha_loss = (-ac_sac.log_alpha.exp() * (log_pi + ac_sac.target_entropy)).mean()
 
                         ac_sac.a_optimizer.zero_grad()

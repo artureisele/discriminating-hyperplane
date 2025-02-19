@@ -23,7 +23,7 @@ from pathlib import Path
 from utils.run_utils import setup_logger_kwargs
 @dataclass
 class Args:
-    exp_name: str = "Cartpole_Expanding_starting_states_large_sigma_perf_hyperplane_policy_real1"#os.path.basename(__file__)[: -len(".py")]
+    exp_name: str = "CartpoleMidterm"#os.path.basename(__file__)[: -len(".py")]
     """the name of this experiment"""
     seed: int = 62
     """seed of the experiment"""
@@ -33,7 +33,7 @@ class Args:
     """if toggled, cuda will be enabled by default"""
     track: bool = True
     """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "cleanRL"
+    wandb_project_name: str = "MidtermCartpole"
     """the wandb's project name"""
     wandb_entity: str = None
     """the entity (team) of wandb's project"""
@@ -86,9 +86,9 @@ class Args:
     "Factor multiplied with safe action deviation"
     penalize_reward_factor: float = 0
     "Number of epochs to retrain safety barriers after every performance actor update"
-    safety_filter_default_path = "model_safety_default_until_safeX11.pt"
-    learning_starting_states = False
-    training_policy = "standard" #uniform, #sigma #median
+    safety_filter_default_path = "CartpoleMidterm2.pt"
+    learning_starting_states = True
+    training_policy = "uniform" #uniform, #sigma #median
     sigma = 0.05
 
 
@@ -202,6 +202,7 @@ if __name__ == "__main__":
     starting_states = None
     if not Path(args.safety_filter_default_path).is_file():
         safety_actor, safety_global_step, starting_states = maybe_update_safe_actor(None, None, s_env_fn, args, 0, logger_kwargs, starting_states)
+        print(f"Starting States after initial Learning:{starting_states}")
         save_safety_actor(safety_actor=safety_actor, path=args.safety_filter_default_path)
     else:
         print(f"Load {args.safety_filter_default_path} safety model")

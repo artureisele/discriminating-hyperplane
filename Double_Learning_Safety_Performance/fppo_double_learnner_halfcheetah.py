@@ -16,23 +16,46 @@ import math
 torch.autograd.set_detect_anomaly(True)
 import wandb
 
-def evaluate(eval_env, env_steps_count,ac, performance_actor_new):
+def evaluate(eval_env, env_steps_count,ac, performance_actor_new, starting_states):
+    print("Starting States:")
+    print(starting_states)
+    print("StartEval")
     evalReturn = 0
     evalReturnWithBonus = 0
-    evalSteps = 1000
+    evalSteps = 100
     max_reward = 1
-    evalIters=1
+    evalIters=10
+    borders = []
+    colors=[]
+    filtered = 0
+    clipped = 0
+    add_to_starting_states = []
+    print("Evaluate filtered performance policy")
     for i in range(evalIters):
+        maybe_potential_starting_states = []
         d = False
         steps = 0
         o, _ = eval_env.reset()
         while(not (d or (steps%evalSteps==0 and steps != 0)) ):
             a, a_h, b_h, v = ac.stepEval(torch.as_tensor(o, dtype=torch.float32))
             if performance_actor_new is not None:
-                actions_per, _, _ = performance_actor_new.actor.get_action(torch.Tensor(o).to("cuda:0").unsqueeze(0))
+                actions_per, _, actions_med, _ = performance_actor_new.actor.get_action(torch.Tensor(o).to("cuda:0").unsqueeze(0))
                 actions_per = actions_per.detach().cpu().numpy()
-                a,filtered,projected = ac.filter_actions_from_numpyarray(a_h,b_h,actions_per[0])
+                a,f,c = ac.filter_actions_from_numpyarray(a_h,b_h,actions_per[0])
+                if f:
+                    filtered = filtered +1
+                if c:
+                    clipped = clipped+1
+                maybe_potential_starting_states.append((o,v))
             next_o, r, d,truncated, info = eval_env.step(a)
+            if d and performance_actor_new is not None:
+                safe_starting_states = [s for s in maybe_potential_starting_states if s[1]>100 and s[1]<150]
+                #print(np.max(np.array(maybe_potential_starting_states)[:,1]))
+                #print(np.min(np.array(maybe_potential_starting_states)[:,1]))
+                #print(np.average(np.array(maybe_potential_starting_states)[:,1]))
+                #print(f"Len safe_starting_states{len(safe_starting_states)}")
+                sampled_safe_states = random.sample(safe_starting_states, 1) if len(safe_starting_states) >= 1 else safe_starting_states
+                add_to_starting_states+= [x[0] for x in sampled_safe_states]
             evalReturnWithBonus+=r
             evalReturn+=r- info["bonus"]
             steps +=1
@@ -44,7 +67,7 @@ def evaluate(eval_env, env_steps_count,ac, performance_actor_new):
                     "agent_eval_safety/episode_reward": evalReturn,
                     "agent_eval_safety/episode_reward_with_bonus": evalReturnWithBonus},
             step=env_steps_count)
-    return evalReturn == evalSteps*max_reward
+    return evalReturn == evalSteps*max_reward, add_to_starting_states
 
 class PPOBuffer:
     """
@@ -144,7 +167,7 @@ class PPOBuffer:
 def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs_retrain_threshold=50, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
         vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97, max_ep_len=1000,
-        target_kl=0.01, logger_kwargs=dict(), save_freq=1, lagrangian=False, performance_actor_new = None, safe_actor = None, safety_global_step = 0):
+        target_kl=0.01, logger_kwargs=dict(), save_freq=1, lagrangian=False, performance_actor_new = None, safe_actor = None, safety_global_step = 0, starting_states = None, learn_starting_states=False, training_policy = "standard", sigma = 0):
     """
     Proximal Policy Optimization (by clipping), 
 
@@ -377,7 +400,17 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Prepare for interaction with environment
     start_time = time.time()
-    o, _ = env.reset()
+    if starting_states == None:
+        o, _ = env.reset()
+    else:
+        index_chosen = random.randrange(len(starting_states))  # Random index
+        state_chosen = starting_states.pop(index_chosen)
+        if len(starting_states) == 0:
+            starting_states =[]
+            for i in range(10):
+                o, _ = env.reset()
+                starting_states.append(o)
+        o,_ = env.reset(options ={"state":state_chosen})
     ep_ret,ep_cret, ep_len = 0,0,0
     env_steps_count = safety_global_step
     # Main loop: collect experience in env and update/log each epoch
@@ -386,24 +419,47 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     frames=[]
     epoch = -1
     safety_assured_counter = 0
+    potential_starting_states = []
     while True:
+        print("Iterate PPO")
+        print(safety_assured_counter)
         if safety_assured_counter>=epochs_retrain_threshold:
             wandb.log({"epoch_until_safe": epoch})
             break
         epoch +=1
+        if starting_states:
+            print(f"Len starting states before update:{len(starting_states)}")
         for t in range(local_steps_per_epoch):
-            a, a_h, b_h, v, logp_a, logp_b = ac.step(torch.as_tensor(o, dtype=torch.float32))
+            actions_per, a_h, b_h, v, logp_a, logp_b = ac.step(torch.as_tensor(o, dtype=torch.float32))
             if performance_actor_new is not None:
-                actions_per, _, _ = performance_actor_new.actor.get_action(torch.Tensor(o).to("cuda:0").unsqueeze(0))
-                actions_per = actions_per.detach().cpu().numpy()
-                a,filtered,projected = ac.filter_actions_from_numpyarray(a_h,b_h,actions_per[0])
-            next_o, r, d, truncated, info = env.step(a)
+                if training_policy=="sigma":
+                    actions_sam, _, actions_med, std= performance_actor_new.actor.get_action(torch.Tensor(o).to("cuda:0").unsqueeze(0))
+                    if std >sigma:
+                        actions_per = actions_sam.detach().cpu().numpy()
+                    else:
+                        actions_med = actions_med.detach().cpu().numpy()
+                        actions_med[0] += np.random.normal(loc=0, scale=sigma, size=1)
+                        actions_per = actions_med
+                if training_policy =="standard":
+                    actions_sam, _, actions_med, std= performance_actor_new.actor.get_action(torch.Tensor(o).to("cuda:0").unsqueeze(0))
+                    actions_per = actions_sam.detach().cpu().numpy()
+                if training_policy == "median":
+                    actions_sam, _, actions_med, std= performance_actor_new.actor.get_action(torch.Tensor(o).to("cuda:0").unsqueeze(0))
+                    actions_per = actions_med.detach().cpu().numpy()
+                if training_policy != "uniform":
+                    pass
+            next_o, r, d, truncated, info = env.step(actions_per)
+            #Regularization
+            #test_numbers = np.random.uniform(-1, 1, 100)
+            #percentage_not_filtered = np.mean(a_h * test_numbers >= b_h)
+            #r += percentage_not_filtered*0.5
+            #info["bonus"]=info["bonus"]+ percentage_not_filtered*0.5
             ep_ret += r
             ep_len += 1
             env_steps_count +=1
 
             # save and log
-            buf.store(o, a, a_h, b_h, r, v, logp_a, logp_b)
+            buf.store(o, actions_per, a_h, b_h, r, v, logp_a, logp_b)
             logger.store(VVals=v)
             
             # Update obs (critical!)
@@ -425,10 +481,31 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 if terminal:
                     # only save EpRet / EpLen if trajectory finished
                     logger.store(EpRet=ep_ret, EpLen=ep_len)
-                o, _ = env.reset()
+                    if starting_states == None:
+                        o, _ = env.reset()
+                    else:
+                        index_chosen = random.randrange(len(starting_states))  # Random index
+                        state_chosen = starting_states.pop(index_chosen)
+                        if len(starting_states) == 0:
+                            starting_states =[]
+                            for i in range(10):
+                                o, _ = env.reset()
+                                starting_states.append(o)
+                        o,_ = env.reset(options ={"state":state_chosen})
                 ep_ret, ep_len = 0,0
-
-        safety_assured = evaluate(eval_env, env_steps_count, ac, performance_actor_new)
+        if starting_states:
+            print(f"Len starting states after update:{len(starting_states)}")
+        safety_assured, starting_states_to_add = evaluate(eval_env, env_steps_count, ac, performance_actor_new, starting_states)
+        if starting_states_to_add!=[] and starting_states_to_add!=None and learn_starting_states:
+            if starting_states == None:
+                if learn_starting_states:
+                    starting_states =[]
+                    for i in range(10):
+                        o, _ = env.reset()
+                        starting_states.append(o)
+            starting_states+=starting_states_to_add
+        if starting_states:
+            print(f"Len starting states after Eval:{len(starting_states)}")
         if safety_assured:
             safety_assured_counter +=1
         else:
@@ -438,10 +515,13 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             vals = logger.epoch_dict['EpRet']
             stats = mpi_statistics_scalar(vals, with_min_and_max=True)
             logger.save_state({'env': env}, None)
-
         # Perform PPO update!
         update(env_steps_count)
         # Log info about epoch
+        if (safety_assured_counter == epochs_retrain_threshold):
+            if learn_starting_states:
+                starting_states = [np.random.uniform(low=-0.05, high=0.05, size=(4,)) for i in range(10)]
+
         logger.log_tabular('Epoch', epoch)
         logger.log_tabular('EpRet', with_min_and_max=True)
         logger.log_tabular('EpLen', average_only=True)
@@ -457,19 +537,14 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('StopIter', average_only=True)
         logger.log_tabular('Time', time.time()-start_time)
         logger.dump_tabular()
-    return ac, env_steps_count
+    return ac, env_steps_count, starting_states
 
-def maybe_update_safe_actor(safe_actor_old, performance_actor_new, env_fn, args, safety_global_step, logger_kwargs):
+def maybe_update_safe_actor(safe_actor_old, performance_actor_new, env_fn, args, safety_global_step, logger_kwargs, starting_states):
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = args.torch_deterministic
-    #if safe_actor_old is None:
-    #    num_steps = int(args.s_initial_steps)
-    #    epochs = int(num_steps / args.s_steps_per_epoch)
-    #else:
-    #    epochs = args.s_epoch_retrain
     return ppo(env_fn=env_fn, actor_critic=core.SafeMLPActorCritic,
         ac_kwargs=dict(hidden_sizes=[args.s_hid]*args.s_l), gamma=args.s_gamma, 
         seed=args.seed, steps_per_epoch=args.s_steps_per_epoch, epochs_retrain_threshold=args.s_epoch_retrain_threshold,
-        logger_kwargs=logger_kwargs, lagrangian=False, performance_actor_new = performance_actor_new, safe_actor=safe_actor_old, safety_global_step=safety_global_step)
+        logger_kwargs=logger_kwargs, lagrangian=False, performance_actor_new = performance_actor_new, safe_actor=safe_actor_old, safety_global_step=safety_global_step, starting_states = starting_states, learn_starting_states=args.learning_starting_states, training_policy= args.training_policy, sigma = args.sigma)

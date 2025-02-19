@@ -32,7 +32,7 @@ class RewardWrapperHalfcheetahHyperPlane(Wrapper[ObsType, ActType, ObsType, ActT
         self, action: ActType
     ) -> tuple[ObsType, SupportsFloat, bool, bool, dict[str, Any]]:
         """Modifies the :attr:`env` :meth:`step` reward using :meth:`self.reward`."""
-        bonus =  int(self.action_space.contains(action))
+        bonus =  int(self.action_space.contains(action))*0.5
         action = np.clip(action, self.action_space.low, self.action_space.high)
         assert self.action_space.contains(action), \
             "%r (%s) invalid" % (action, type(action))

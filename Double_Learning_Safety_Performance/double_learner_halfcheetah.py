@@ -79,27 +79,34 @@ class Args:
     "gamma value for safe actor"
     s_initial_steps: float = 5010000
     "Initial training steps for saftey barriers"
-    s_steps_per_epoch: int = 30000
+    s_steps_per_epoch: int = 15000
     "Steps in environment per training epoch. If terminated during this steps new episode is started till 4000 is reached"
     s_epoch_retrain_threshold: int = 5
     "Penalize safe action deviation?"
     penalize_reward: bool = True
     "Factor multiplied with safe action deviation"
-    penalize_reward_factor: float = 1
+    penalize_reward_factor: float = 0
     "Number of epochs to retrain safety barriers after every performance actor update"
-    safety_filter_default_path = "model_safety_default_halfcheetah_until_safe.pt"
+    safety_filter_default_path = "model_safety_default_until_safeYZXFFF.pt"
+    learning_starting_states = True
+    training_policy = "uniform" #uniform, #sigma #median
+    sigma = 0.05
 
 
 def make_env_safety_halfcheetah(env_id, seed, idx, capture_video, run_name):
     def thunk():
         if capture_video and idx == 0:
             env = gymnasium.make(env_id, render_mode="rgb_array")
+            from gymnasium.wrappers import TimeLimit
+            env = TimeLimit(env, 100)
             env = gymnasium.wrappers.RecordVideo(env, f"videos/{run_name}",step_trigger=lambda x : False)
         else:
             env = gymnasium.make(env_id)
+            from gymnasium.wrappers import TimeLimit
+            env = TimeLimit(env, 100)
+        env = RewardWrapperHalfcheetahHyperPlane(env, safety_reward = True)
         env = gymnasium.wrappers.RecordEpisodeStatistics(env)
         env.action_space.seed(seed)
-        env = RewardWrapperHalfcheetahHyperPlane(env, safety_reward = True)
         return env
 
     return thunk
@@ -109,12 +116,16 @@ def makemake_env_perf(env_id, seed, idx, capture_video, run_name):
         capture_video = True
         if capture_video and idx == 0:
             env = gymnasium.make(env_id, render_mode="rgb_array")
+            from gymnasium.wrappers import TimeLimit
+            env = TimeLimit(env, 100)
             env = gymnasium.wrappers.RecordVideo(env, f"videos/{run_name}", episode_trigger=lambda x : True)
             print(env.metadata.get("render_fps", None))
         else:
             env = gymnasium.make(env_id)
-        env = gymnasium.wrappers.RecordEpisodeStatistics(env)
+            from gymnasium.wrappers import TimeLimit
+            env = TimeLimit(env, 100)
         env = RewardWrapperHalfcheetahHyperPlane(env, safety_reward = False)
+        env = gymnasium.wrappers.RecordEpisodeStatistics(env)
         env.action_space.seed(seed)
         return env
 
@@ -193,20 +204,21 @@ if __name__ == "__main__":
     logger_kwargs = setup_logger_kwargs(args.exp_name, args.env_id, args.seed)
     output_dir = logger_kwargs["output_dir"]
     log_training_switches(performance=False)
-
+    starting_states = None
     if not Path(args.safety_filter_default_path).is_file():
-        safety_actor, safety_global_step = maybe_update_safe_actor(None, None, s_env_fn, args, 0, logger_kwargs)
+        safety_actor, safety_global_step, starting_states = maybe_update_safe_actor(None, None, s_env_fn, args, 0, logger_kwargs, starting_states)
+        print(f"Starting States after initial Learning:{starting_states}")
         save_safety_actor(safety_actor=safety_actor, path=args.safety_filter_default_path)
     else:
         print(f"Load {args.safety_filter_default_path} safety model")
         safety_actor = torch.load(args.safety_filter_default_path)
         safety_global_step = 0
     log_training_switches(performance=True)
-
+    # Just initialize the actor and do some training on random explore
     performance_actor, global_step, count_failure = maybe_update_performance_actor(safety_actor,None, p_env_fn,args,0,0, output_dir)
     print("Initial Learning finished")
     for i in range(0, args.double_learning_iterations):
         log_training_switches(performance=False)
-        safety_actor, safety_global_step= maybe_update_safe_actor(safety_actor, performance_actor, s_env_fn, args, safety_global_step,logger_kwargs)
+        safety_actor, safety_global_step, starting_states= maybe_update_safe_actor(safety_actor, performance_actor, s_env_fn, args, safety_global_step,logger_kwargs, starting_states)
         log_training_switches(performance=True)
         performance_actor, global_step, count_failure = maybe_update_performance_actor(safety_actor, performance_actor, p_env_fn, args,global_step, count_failure, output_dir)

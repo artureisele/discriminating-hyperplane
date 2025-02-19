@@ -119,7 +119,6 @@ def maybe_update_performance_actor(safe_actor_new, performance_actor_old, env_fn
     count_failure = perf_global_failure_counter
     if performance_actor_old is None:
         ac_sac = ActorCriticSAC(envs=envs, device=device, args=args)
-        return ac_sac, 0, 0
     else:
         ac_sac = performance_actor_old
 
@@ -179,11 +178,10 @@ def maybe_update_performance_actor(safe_actor_new, performance_actor_old, env_fn
             last_start_of_episode = global_step+1
             obs, infos = envs.reset()
         # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
-    print("Start Training")
     print(f"{perf_global_step}-{end_step}")
     for global_step_training in range(perf_global_step, end_step):
         # ALGO LOGIC: training  start if performance_actor_o
-        if global_step_training>= args.learning_starts:
+        if global_step_training>= args.learning_starts-1000:
             data = ac_sac.rb.sample(args.batch_size)
             with torch.no_grad():
                 next_state_actions, next_state_log_pi, _, std= ac_sac.actor.get_action(data.next_observations)

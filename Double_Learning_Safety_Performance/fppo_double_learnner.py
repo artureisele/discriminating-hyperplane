@@ -16,213 +16,90 @@ import math
 torch.autograd.set_detect_anomaly(True)
 import wandb
 
-def evaluate(eval_env, env_steps_count,ac, performance_actor_new):
-    evalReturn = 0
-    evalIters=1
-    borders = []
-    colors=[]
-    for i in range(evalIters):
-        d = False
-        steps = 0
-        o, _ = eval_env.reset()
-        while(not (d or (steps%500==0 and steps != 0)) ):
-            a, a_h, b_h, v = ac.stepEval(torch.as_tensor(o, dtype=torch.float32))
-            if performance_actor_new is not None:
-                actions_per, _, _ = performance_actor_new.actor.get_action(torch.Tensor(o).to("cuda:0").unsqueeze(0))
-                actions_per = actions_per.detach().cpu().numpy()
-                a,filtered,projected = ac.filter_actions_from_numpyarray(a_h,b_h,actions_per[0])
-            next_o, r, d,truncated, info = eval_env.step(a)
-            evalReturn+=r
-            steps +=1
-            #eval_env.render()
-            if(a_h>0):
-                to_right_is_dangerous = True
-            else:
-                to_right_is_dangerous = False
-            threshold = (b_h/a_h)[0]
-            borders.append([o[0],o[2],to_right_is_dangerous, threshold])
-            colors.append(steps/500)
-            o = next_o
+safe_x = 2.4
+safe_radians = 24 * 2 * math.pi / 360
 
-    fig = plt.figure(figsize=(8, 8))
-    ax = fig.add_subplot(111)
-    arrowDirX=[]
-    arrowDirY=[]
-    for _,_,to_right_is_dangerous, threshold in borders:
-        intensity = min(abs(threshold),1)
-        if to_right_is_dangerous:
-            if threshold<0:
-                #Strong decision drive left(negative) <------
-                arrowDirX.append(-1+ intensity * -20)
-                arrowDirY.append(0)
-            else:
-                arrowDirX.append(0)
-                arrowDirY.append(0.1)
-        else:
-            if threshold<0:
-                arrowDirX.append(0)
-                arrowDirY.append(-0.1)
-            else:
-                #Strong decision drive right(positive) <------
-                arrowDirX.append(1+intensity*20)
-                arrowDirY.append(0)
-    borders = np.array(borders)
-    safe_x = 2.4
-    safe_radians = 24 * 2 * math.pi / 360
-    rectangle = patches.Rectangle((-safe_x, -safe_radians), 2*safe_x, 2*safe_radians, linewidth=2, edgecolor='green', facecolor='white')
-    ax.add_patch(rectangle)
-    quiver_plot=plt.quiver(borders[:,0], borders[:,1], arrowDirX, arrowDirY,colors, cmap="viridis", angles='xy', scale_units='xy', scale=25)
-    # This are the borders of the simulation
-    plt.axis([-2*safe_x, 2*safe_x, -2*safe_radians, 2*safe_radians])
-    plt.colorbar(quiver_plot, label="Timesteps")            
-    plt.xlabel("X")
-    plt.ylabel("Theta")
-    plt.title("Cartpole Border Decisions")
-    evalReturn/=evalIters
-    # Log the plot to WandB
-    wandb.log(data={"agent_eval_safety/env_step": env_steps_count,
-                    "agent_eval_safety/episode_reward": evalReturn,
-                    "agent_eval_safety/CartpoleBorderDecisions": wandb.Image(plt)},
-            step=env_steps_count)
-    plt.close()  # Close plot to avoid replotting issues
-def evaluate2(eval_env, env_steps_count, ac, performance_actor_new, potential_starting_states, starting_states):
-    print("StartEval2")
-    evalReturn = 0
-    evalReturnWithBonus = 0
+
+def eval_for_trajectories_without_filtering(eval_env, performance_actor_new, starting_states):
+    print("StartEval for Wandb")
     evalSteps = 500
-    max_reward = 1
     evalIters=10
-    borders = []
-    colors=[]
-    filtered = 0
-    clipped = 0
-    maybe_potential_starting_states = []
     desired=[]
     desired_color=[]
     uniform = []
     uniform_color = []
     #Uniform Trajectories
+    print("Eval Uniform Trajectories")
     for k in range(evalIters):
         d = False
         steps = 0
         if starting_states == None:
-            print("Random starting State")
             o, _ = eval_env.reset()
         else:
-            if random.random()>0.5:
-                o,_ = eval_env.reset(options ={"state":random.choice(starting_states)})
-            else:
-                o, _ = eval_env.reset()
+            o,_ = eval_env.reset(options ={"state":random.choice(starting_states)})
         while(not (d or (steps%evalSteps==0 and steps != 0)) ):
             uniform_a = np.random.uniform(-1,1,1)
             next_o, r, d,truncated, info = eval_env.step(uniform_a)
             uniform.append([o[0],o[2]])
             uniform_color.append(k)
             o = next_o
-    #Desired Trajectories
-    for j in range(evalIters):
-        d = False
-        steps = 0
-        if starting_states == None:
-            print("Random starting State")
-            o, _ = eval_env.reset()
-        else:
-            if random.random()>0.5:
-                o,_ = eval_env.reset(options ={"state":random.choice(starting_states)})
-            else:
-                o, _ = eval_env.reset()
-        while(not (d or (steps%evalSteps==0 and steps != 0)) ):
-            actions_per, _, actions_med, _ = performance_actor_new.actor.get_action(torch.Tensor(o).to("cuda:0").unsqueeze(0))
-            actions_per = actions_per.detach().cpu().numpy()
-            next_o, r, d,truncated, info = eval_env.step(actions_per[0])
-            desired.append([o[0],o[2]])
-            desired_color.append(j)
-            o = next_o
-    for i in range(evalIters):
-        d = False
-        steps = 0
-        if starting_states == None:
-            print("Random starting State")
-            o, _ = eval_env.reset()
-        else:
-            if random.random()>0.5:
-                o,_ = eval_env.reset(options ={"state":random.choice(starting_states)})
-            else:
-                o, _ = eval_env.reset()
-        while(not (d or (steps%evalSteps==0 and steps != 0)) ):
-            a, a_h, b_h, v = ac.stepEval(torch.as_tensor(o, dtype=torch.float32))
-            if performance_actor_new is not None:
-                actions_per, _, actions_med, _ = performance_actor_new.actor.get_action(torch.Tensor(o).to("cuda:0").unsqueeze(0))
-                actions_per = actions_per.detach().cpu().numpy()
-                a,f,c = ac.filter_actions_from_numpyarray(a_h,b_h,actions_per[0])
-                if f:
-                    filtered = filtered +1
-                if c:
-                    clipped = clipped+1
-            if steps%50 == 0 and steps <=100 and steps>0:
-                maybe_potential_starting_states.append(o)
-            next_o, r, d,truncated, info = eval_env.step(a)
-            #Regularization
-            #test_numbers = np.random.uniform(-1, 1, 100)
-            #percentage_not_filtered = np.mean(a_h * test_numbers >= b_h)
-            #r += percentage_not_filtered*0.5
-            #info["bonus"]=info["bonus"]+ percentage_not_filtered*0.5
-            
-            evalReturnWithBonus+=r
-            evalReturn+=r- info["bonus"]
-            steps +=1
-            #eval_env.render()
-            if(a_h>0):
-                to_right_is_dangerous = True
-            else:
-                to_right_is_dangerous = False
-            threshold = (b_h/a_h)[0]
-            borders.append([o[0],o[2],to_right_is_dangerous, threshold])
-            colors.append(steps/500)
-            o = next_o
-    fig = plt.figure(figsize=(8, 8))
+    #Plot Uniform Trajectories
+    uniform = np.array(uniform)
+    fig = plt.figure(figsize=(8, 8), clear=True, num=1)
     ax = fig.add_subplot(111)
-    arrowDirX=[]
-    arrowDirY=[]
-    for _,_,to_right_is_dangerous, threshold in borders:
-        intensity = min(abs(threshold),1)
-        if to_right_is_dangerous:
-            if threshold<0:
-                #Strong decision drive left(negative) <------
-                arrowDirX.append(-1+ intensity * -20)
-                arrowDirY.append(0)
-            else:
-                arrowDirX.append(0)
-                arrowDirY.append(0.1)
-        else:
-            if threshold<0:
-                arrowDirX.append(0)
-                arrowDirY.append(-0.1)
-            else:
-                #Strong decision drive right(positive) <------
-                arrowDirX.append(1+intensity*20)
-                arrowDirY.append(0)
-    borders = np.array(borders)
-    safe_x = 2.4
-    safe_radians = 24 * 2 * math.pi / 360
     rectangle = patches.Rectangle((-safe_x, -safe_radians), 2*safe_x, 2*safe_radians, linewidth=2, edgecolor='green', facecolor='white')
     ax.add_patch(rectangle)
-    quiver_plot=plt.quiver(borders[:,0], borders[:,1], arrowDirX, arrowDirY,colors, cmap="viridis", angles='xy', scale_units='xy', scale=25)
+    value_plot=plt.scatter(uniform[:,0], uniform[:,1], c= uniform_color, cmap ="viridis", s=30)
     # This are the borders of the simulation
     plt.axis([-2*safe_x, 2*safe_x, -2*safe_radians, 2*safe_radians])
-    plt.colorbar(quiver_plot, label="Timesteps")            
+    plt.colorbar(value_plot, label="trajectory index")            
     plt.xlabel("X")
     plt.ylabel("Theta")
-    plt.title("Cartpole Trajectory")
-    plot1 = wandb.Image(plt)
-    plt.close()
+    plt.title("Uniform Trajectories")
+    plot5 = wandb.Image(plt)
 
-    safe_radians = 24 * 2 * math.pi / 360
+    #Desired Trajectories
+    if performance_actor_new !=None:
+        print("Eval desired Trajectories")
+        for j in range(evalIters):
+            d = False
+            steps = 0
+            if starting_states == None:
+                o, _ = eval_env.reset()
+            else:
+                o,_ = eval_env.reset(options ={"state":random.choice(starting_states)})
+            while(not (d or (steps%evalSteps==0 and steps != 0)) ):
+                actions_per, _, actions_med, _ = performance_actor_new.actor.get_action(torch.Tensor(o).to("cuda:0").unsqueeze(0))
+                actions_per = actions_per.detach().cpu().numpy()
+                next_o, r, d,truncated, info = eval_env.step(actions_per[0])
+                desired.append([o[0],o[2]])
+                desired_color.append(j)
+                o = next_o
+    else:
+        desired = [[0,0]]
+        desired_color = [0]
+    desired = np.array(desired)
+    #Plot desired trajectory
+    fig = plt.figure(figsize=(8, 8),clear=True, num=1)
+    ax = fig.add_subplot(111)
+    rectangle = patches.Rectangle((-safe_x, -safe_radians), 2*safe_x, 2*safe_radians, linewidth=2, edgecolor='green', facecolor='white')
+    ax.add_patch(rectangle)
+    value_plot=plt.scatter(desired[:,0], desired[:,1], c= desired_color, cmap ="viridis", s=30)
+    # This are the borders of the simulation
+    plt.axis([-2*safe_x, 2*safe_x, -2*safe_radians, 2*safe_radians])
+    plt.colorbar(value_plot, label="trajectory index")            
+    plt.xlabel("X")
+    plt.ylabel("Theta")
+    plt.title("Desired Trajectories")
+    plot4 = wandb.Image(plt)
+
+    return plot4, plot5
+
+def eval_safety_value_function(ac):
     borders = []
     arrowDirX=[]
     arrowDirY=[]
-    safe_x=2.4
-    fig = plt.figure(figsize=(8, 8))
+    fig = plt.figure(figsize=(8, 8), clear=True, num=1)
     ax = fig.add_subplot(111)
     colors = []
     colors_v = []
@@ -246,62 +123,161 @@ def evaluate2(eval_env, env_steps_count, ac, performance_actor_new, potential_st
                 arrowDirY.append(1)
                 colors.append(threshold)
     borders = np.array(borders)
-    desired = np.array(desired)
-    uniform = np.array(uniform)
     rectangle = patches.Rectangle((-safe_x, -safe_radians), 2*safe_x, 2*safe_radians, linewidth=2, edgecolor='green', facecolor='white')
     ax.add_patch(rectangle)
     quiver_plot=plt.quiver(borders[:,0], borders[:,1], arrowDirX, arrowDirY,colors, cmap ="viridis", angles='xy', scale_units='xy', scale=25)
-    # This are the borders of the simulation
+    # This are the learned hyperplanes plottted in state space
     plt.axis([-2*safe_x, 2*safe_x, -2*safe_radians, 2*safe_radians])
     plt.colorbar(quiver_plot, label="Safe actions from value in direction of arrow")            
     plt.xlabel("X")
     plt.ylabel("Theta")
     plt.title("Cartpole Border Decisions")
     plot2 = wandb.Image(plt)
-    plt.close()
-    fig = plt.figure(figsize=(8, 8))
+
+    #These will plot the value function of the ppo hyperplane learning
+    fig = plt.figure(figsize=(8, 8), clear=True, num=1)
     ax = fig.add_subplot(111)
     rectangle = patches.Rectangle((-safe_x, -safe_radians), 2*safe_x, 2*safe_radians, linewidth=2, edgecolor='green', facecolor='white')
     ax.add_patch(rectangle)
     value_plot=plt.scatter(borders[:,0], borders[:,1], c= colors_v, cmap ="viridis", s=30)
-    # This are the borders of the simulation
     plt.axis([-2*safe_x, 2*safe_x, -2*safe_radians, 2*safe_radians])
     plt.colorbar(value_plot, label="Value function values")            
     plt.xlabel("X")
     plt.ylabel("Theta")
     plt.title("Value function")
     plot3 = wandb.Image(plt)
-    plt.close()
-    #Plot what performance Policy wants
-    fig = plt.figure(figsize=(8, 8))
+
+    return plot2, plot3
+
+def evaluate(eval_env, env_steps_count, ac, performance_actor_new, starting_states):
+    print("Starting States:")
+    print(starting_states)
+    print("StartEval")
+    evalReturn = 0
+    evalReturnWithBonus = 0
+    evalSteps = 500
+    max_reward = 1
+    evalIters=10
+    borders = []
+    colors=[]
+    filtered = 0
+    clipped = 0
+    add_to_starting_states = []
+    print("Evaluate filtered performance policy")
+    for i in range(evalIters):
+        maybe_potential_starting_states = []
+        d = False
+        steps = 0
+        o, _ = eval_env.reset()
+        while(not (d or (steps%evalSteps==0 and steps != 0)) ):
+            a, a_h, b_h, v = ac.stepEval(torch.as_tensor(o, dtype=torch.float32))
+            if performance_actor_new is not None:
+                actions_per, _, actions_med, _ = performance_actor_new.actor.get_action(torch.Tensor(o).to("cuda:0").unsqueeze(0))
+                actions_per = actions_per.detach().cpu().numpy()
+                a,f,c = ac.filter_actions_from_numpyarray(a_h,b_h,actions_per[0])
+                if f:
+                    filtered = filtered +1
+                if c:
+                    clipped = clipped+1
+                maybe_potential_starting_states.append((o,v))
+            next_o, r, d,truncated, info = eval_env.step(a)
+            if d and performance_actor_new is not None:
+                safe_starting_states = [s for s in maybe_potential_starting_states if s[1] > 50 and s[1]<100]
+                sampled_safe_states = random.sample(safe_starting_states, 1) if len(safe_starting_states) >= 1 else safe_starting_states
+                add_to_starting_states+= [x[0] for x in sampled_safe_states]
+                # Sort maybe_potential_starting_states by s[1] in descending order
+                #maybe_potential_starting_states.sort(key=lambda s: s[1], reverse=True)
+
+                # Filter the sorted list to include only states where s[1] < 100
+                #safe_starting_states = [s for s in maybe_potential_starting_states if s[1]>50 and s[1] < 100]
+
+                # Get the highest s[1] still lower than 100, and extract the corresponding s[0]
+                #if safe_starting_states:
+                    #highest_safe_state = safe_starting_states[0]  # First element after sorting
+                    #add_to_starting_states += [highest_safe_state[0]]
+                #else:
+                    #add_to_starting_states += []  # No safe states
+
+                
+            #Regularization
+            #test_numbers = np.random.uniform(-1, 1, 100)
+            #percentage_not_filtered = np.mean(a_h * test_numbers >= b_h)
+            #r += percentage_not_filtered*0.5
+            #info["bonus"]=info["bonus"]+ percentage_not_filtered*0.5
+            
+            evalReturnWithBonus+=r
+            evalReturn+=r- info["bonus"]
+            steps +=1
+            #eval_env.render()
+            if(a_h>0):
+                to_right_is_dangerous = True
+            else:
+                to_right_is_dangerous = False
+            threshold = (b_h/a_h)[0]
+            borders.append([o[0],o[2],to_right_is_dangerous, threshold])
+            colors.append(v)
+            o = next_o
+    arrowDirX=[]
+    arrowDirY=[]
+    for _,_,to_right_is_dangerous, threshold in borders:
+        intensity = min(abs(threshold),1)
+        if to_right_is_dangerous:
+            if threshold<0:
+                #Strong decision drive left(negative) <------
+                arrowDirX.append(-1+ intensity * -20)
+                arrowDirY.append(0)
+            else:
+                arrowDirX.append(0)
+                arrowDirY.append(0.1)
+        else:
+            if threshold<0:
+                arrowDirX.append(0)
+                arrowDirY.append(-0.1)
+            else:
+                #Strong decision drive right(positive) <------
+                arrowDirX.append(1+intensity*20)
+                arrowDirY.append(0)
+    borders = np.array(borders)
+    fig = plt.figure(figsize=(8, 8), clear=True, num=1)
     ax = fig.add_subplot(111)
     rectangle = patches.Rectangle((-safe_x, -safe_radians), 2*safe_x, 2*safe_radians, linewidth=2, edgecolor='green', facecolor='white')
     ax.add_patch(rectangle)
-    value_plot=plt.scatter(desired[:,0], desired[:,1], c= desired_color, cmap ="viridis", s=30)
+    quiver_plot=plt.quiver(borders[:,0], borders[:,1], arrowDirX, arrowDirY,colors, cmap="viridis", angles='xy', scale_units='xy', scale=25)
     # This are the borders of the simulation
     plt.axis([-2*safe_x, 2*safe_x, -2*safe_radians, 2*safe_radians])
-    plt.colorbar(value_plot, label="trajectory index")            
+    plt.colorbar(quiver_plot, label="Timesteps")            
     plt.xlabel("X")
     plt.ylabel("Theta")
-    plt.title("Desired Trajectories")
-    plot4 = wandb.Image(plt)
-    plt.close()
-    #Plot what Uniform Policy explores
-    fig = plt.figure(figsize=(8, 8))
-    ax = fig.add_subplot(111)
-    rectangle = patches.Rectangle((-safe_x, -safe_radians), 2*safe_x, 2*safe_radians, linewidth=2, edgecolor='green', facecolor='white')
-    ax.add_patch(rectangle)
-    value_plot=plt.scatter(uniform[:,0], uniform[:,1], c= uniform_color, cmap ="viridis", s=30)
-    # This are the borders of the simulation
-    plt.axis([-2*safe_x, 2*safe_x, -2*safe_radians, 2*safe_radians])
-    plt.colorbar(value_plot, label="trajectory index")            
-    plt.xlabel("X")
-    plt.ylabel("Theta")
-    plt.title("Uniform Trajectories")
-    plot5 = wandb.Image(plt)
-    plt.close()
+    plt.title("Cartpole Trajectory")
+    plot1 = wandb.Image(plt)
+
+
     evalReturn/=evalIters
     evalReturnWithBonus/=evalIters
+    plot4,plot5 = eval_for_trajectories_without_filtering(eval_env, performance_actor_new, starting_states)
+    plot2, plot3 = eval_safety_value_function(ac)
+
+    if len(add_to_starting_states)>6:
+        add_to_starting_states=random.sample(add_to_starting_states, 6)
+    print("Plot Updated Starting States")
+    if not starting_states is None:
+        updated_starting_states = starting_states+add_to_starting_states
+    else:
+        updated_starting_states = np.array([[0,0,0,0]])
+
+    fig = plt.figure(figsize=(8, 8), clear=True, num=1)
+    ax = fig.add_subplot(111)
+    rectangle = patches.Rectangle((-safe_x, -safe_radians), 2*safe_x, 2*safe_radians, linewidth=2, edgecolor='green', facecolor='white')
+    ax.add_patch(rectangle)
+    value_plot=plt.scatter(np.array(updated_starting_states)[:,0], np.array(updated_starting_states)[:,2])
+    # This are the borders of the simulation
+    plt.axis([-2*safe_x, 2*safe_x, -2*safe_radians, 2*safe_radians])       
+    plt.xlabel("X")
+    plt.ylabel("Theta")
+    plt.title("Starting States")
+    plot6 = wandb.Image(plt)
+
+
     # Log the plot to WandB
     wandb.log(data={"agent_eval_safety/env_step": env_steps_count,
                     "agent_eval_safety/episode_reward": evalReturn,
@@ -312,11 +288,12 @@ def evaluate2(eval_env, env_steps_count, ac, performance_actor_new, potential_st
                     "agent_eval_safety/CartpoleBorderDecisions": plot2,
                     "agent_eval_safety/CartpoleValueFunction": plot3,
                     "agent_eval_safety/desired_trajectories": plot4,
-                    "agent_eval_safety/uniform_trajectories": plot5},
+                    "agent_eval_safety/uniform_trajectories": plot5,
+                     "agent_eval_safety/starting_states": plot6},
             step=env_steps_count)
-    if evalReturn == evalSteps*max_reward:
-        potential_starting_states +=maybe_potential_starting_states
-    return evalReturn == evalSteps*max_reward, potential_starting_states
+    #if evalReturn == evalSteps*max_reward:
+        #potential_starting_states +=maybe_potential_starting_states
+    return evalReturn == evalSteps*max_reward, add_to_starting_states
 
 class PPOBuffer:
     """
@@ -541,7 +518,6 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Create actor-critic module
     if safe_actor is None:
         ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
-        return ac, 0, None
     else: 
         ac = safe_actor
     # Sync params across processes
@@ -653,10 +629,11 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     if starting_states == None:
         o, _ = env.reset()
     else:
-        if random.random()>0.5:
-            o,_ = env.reset(options ={"state":random.choice(starting_states)})
-        else:
-            o, _ = env.reset()
+        index_chosen = random.randrange(len(starting_states))  # Random index
+        state_chosen = starting_states.pop(index_chosen)
+        o,_ = env.reset(options ={"state":state_chosen})
+        if len(starting_states) == 0:
+            starting_states =[np.random.uniform(low=-0.05, high=0.05, size=(4,)) for i in range(10)]
     ep_ret,ep_cret, ep_len = 0,0,0
     env_steps_count = safety_global_step
     # Main loop: collect experience in env and update/log each epoch
@@ -673,11 +650,11 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             wandb.log({"epoch_until_safe": epoch})
             break
         epoch +=1
+        if starting_states:
+            print(f"Len starting states before update:{len(starting_states)}")
         for t in range(local_steps_per_epoch):
-            a, a_h, b_h, v, logp_a, logp_b = ac.step(torch.as_tensor(o, dtype=torch.float32))
+            actions_per, a_h, b_h, v, logp_a, logp_b = ac.step(torch.as_tensor(o, dtype=torch.float32))
             if performance_actor_new is not None:
-                stdUP = False
-                median = False
                 if training_policy=="sigma":
                     actions_sam, _, actions_med, std= performance_actor_new.actor.get_action(torch.Tensor(o).to("cuda:0").unsqueeze(0))
                     if std >sigma:
@@ -693,8 +670,8 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                     actions_sam, _, actions_med, std= performance_actor_new.actor.get_action(torch.Tensor(o).to("cuda:0").unsqueeze(0))
                     actions_per = actions_med.detach().cpu().numpy()
                 if training_policy != "uniform":
-                    a,filtered,projected = ac.filter_actions_from_numpyarray(a_h,b_h,actions_per[0])
-            next_o, r, d, truncated, info = env.step(a)
+                    pass
+            next_o, r, d, truncated, info = env.step(actions_per)
             #Regularization
             #test_numbers = np.random.uniform(-1, 1, 100)
             #percentage_not_filtered = np.mean(a_h * test_numbers >= b_h)
@@ -705,7 +682,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             env_steps_count +=1
 
             # save and log
-            buf.store(o, a, a_h, b_h, r, v, logp_a, logp_b)
+            buf.store(o, actions_per, a_h, b_h, r, v, logp_a, logp_b)
             logger.store(VVals=v)
             
             # Update obs (critical!)
@@ -730,13 +707,22 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                     if starting_states == None:
                         o, _ = env.reset()
                     else:
-                        if random.random()>0.5:
-                            o,_ = env.reset(options ={"state":random.choice(starting_states)})
-                        else:
-                            o, _ = env.reset()
+                        index_chosen = random.randrange(len(starting_states))  # Random index
+                        state_chosen = starting_states.pop(index_chosen)
+                        o,_ = env.reset(options ={"state":state_chosen})
+                        if len(starting_states) == 0:
+                            starting_states = [np.random.uniform(low=-0.05, high=0.05, size=(4,)) for i in range(10)]
                 ep_ret, ep_len = 0,0
-
-        safety_assured, potential_starting_states = evaluate2(eval_env, env_steps_count, ac, performance_actor_new, potential_starting_states, starting_states)
+        if starting_states:
+            print(f"Len starting states after update:{len(starting_states)}")
+        safety_assured, starting_states_to_add = evaluate(eval_env, env_steps_count, ac, performance_actor_new, starting_states)
+        if starting_states_to_add!=[] and starting_states_to_add!=None and learn_starting_states:
+            if starting_states == None:
+                if learn_starting_states:
+                    starting_states = [np.random.uniform(low=-0.05, high=0.05, size=(4,)) for i in range(10)]
+            starting_states+=starting_states_to_add
+        if starting_states:
+            print(f"Len starting states after Eval:{len(starting_states)}")
         if safety_assured:
             safety_assured_counter +=1
         else:
@@ -751,10 +737,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Log info about epoch
         if (safety_assured_counter == epochs_retrain_threshold):
             if learn_starting_states:
-                if starting_states is None:
-                    starting_states= potential_starting_states[epochs_retrain_threshold*-2:]
-                else:
-                    starting_states += potential_starting_states[epochs_retrain_threshold*-2:]
+                starting_states = [np.random.uniform(low=-0.05, high=0.05, size=(4,)) for i in range(10)]
 
         logger.log_tabular('Epoch', epoch)
         logger.log_tabular('EpRet', with_min_and_max=True)
@@ -814,24 +797,6 @@ def maybe_update_safe_actor(safe_actor_old, performance_actor_new, env_fn, args,
             i+=1
             obs, _ = envs.reset(seed=args.seed)
     """
-    if not starting_states is None:
-        safe_x = 2.4
-        safe_radians = 24 * 2 * math.pi / 360
-        fig = plt.figure(figsize=(8, 8))
-        ax = fig.add_subplot(111)
-        rectangle = patches.Rectangle((-safe_x, -safe_radians), 2*safe_x, 2*safe_radians, linewidth=2, edgecolor='green', facecolor='white')
-        ax.add_patch(rectangle)
-        value_plot=plt.scatter(np.array(starting_states)[:,0], np.array(starting_states)[:,2])
-        # This are the borders of the simulation
-        plt.axis([-2*safe_x, 2*safe_x, -2*safe_radians, 2*safe_radians])
-        plt.colorbar(value_plot, label="Value function values")            
-        plt.xlabel("X")
-        plt.ylabel("Theta")
-        plt.title("Value function")
-        plot3 = wandb.Image(plt)
-        wandb.log({"Starting States": plot3})
-        plt.close()
-        print(len(starting_states))
     # TRY NOT TO MODIFY: save data to reply buffer; handle `final_observation
     return ppo(env_fn=env_fn, actor_critic=core.SafeMLPActorCritic,
         ac_kwargs=dict(hidden_sizes=[args.s_hid]*args.s_l), gamma=args.s_gamma, 
