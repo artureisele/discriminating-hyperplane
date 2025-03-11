@@ -25,7 +25,7 @@ from utils.run_utils import setup_logger_kwargs
 class Args:
     exp_name: str = "CartpoleMidterm"#os.path.basename(__file__)[: -len(".py")]
     """the name of this experiment"""
-    seed: int = 62
+    seed: int = 63
     """seed of the experiment"""
     torch_deterministic: bool = True
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
@@ -86,7 +86,7 @@ class Args:
     "Factor multiplied with safe action deviation"
     penalize_reward_factor: float = 0
     "Number of epochs to retrain safety barriers after every performance actor update"
-    safety_filter_default_path = "CartpoleMidterm2.pt"
+    safety_filter_default_path = "CartpoleMidterm22.pt"
     learning_starting_states = True
     training_policy = "uniform" #uniform, #sigma #median
     sigma = 0.05

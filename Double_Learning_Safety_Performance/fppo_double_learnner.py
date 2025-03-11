@@ -103,6 +103,9 @@ def eval_safety_value_function(ac):
     ax = fig.add_subplot(111)
     colors = []
     colors_v = []
+    a_h_list = []
+    b_h_list = []
+    threshold_list=[]
     for x in np.arange(-2.4-2.4,2.5+2.4,0.2):
         for theta in np.arange(-safe_radians*2,safe_radians*2,math.pi / 360 *8):
             o=[x,0,theta,0]
@@ -110,6 +113,10 @@ def eval_safety_value_function(ac):
             colors_v.append(v)
             borders.append([x,theta])
             threshold = np.clip((b_h/a_h)[0],-1,1)
+            a_h_list.append(a_h)
+            b_h_list.append(b_h)
+            threshold_list.append((b_h/a_h)[0])
+            #print(f"a_h:{a_h},b_h{b_h},th:{threshold}")
             if(a_h>0):
                 to_right_is_dangerous = False
             else:
@@ -643,6 +650,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     epoch = -1
     safety_assured_counter = 0
     potential_starting_states = []
+    _, _ = evaluate(eval_env, env_steps_count, ac, performance_actor_new, starting_states)
     while True:
         print("Iterate PPO")
         print(safety_assured_counter)
